@@ -288,7 +288,8 @@ function resolveRound(state: GameState): void {
     p.mulliganDone = false
     p.mulligansLeft = MULLIGANS_PER_ROUND[state.round - 1]
   }
-  state.leader = roundWinner === 'draw' ? state.leader : roundWinner
+  // The round winner leads the next round; on a tie, whoever went second.
+  state.leader = roundWinner === 'draw' ? opponentOf(state.leader) : roundWinner
   state.current = state.leader
   state.phase = 'mulligan'
   emit(state, { type: 'roundStarted', round: state.round, leader: state.leader })

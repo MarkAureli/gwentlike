@@ -275,6 +275,30 @@ describe('rounds and game end', () => {
     expect(g.players[1].roundWins).toBe(1)
   })
 
+  it('after a drawn round, the player who went second leads the next', () => {
+    // Player 0 leads round 1; the round ties 4–4.
+    let g = gameWith(['militia', 'militia'], ['militia', 'militia'], 0)
+    g = play(g, 0, 0, 'melee')
+    g = play(g, 1, 0, 'ranged')
+    g = pass(g, 0)
+    g = pass(g, 1)
+    expect(g.round).toBe(2)
+    expect(g.leader).toBe(1)
+    expect(g.current).toBe(1) // player 1 mulligans (and later acts) first
+  })
+
+  it('the round winner leads the next round', () => {
+    // Player 1 leads round 1 but loses it 4–6.
+    let g = gameWith(['pikeman', 'militia'], ['militia', 'militia'], 1)
+    g = play(g, 1, 0, 'melee')
+    g = play(g, 0, 0, 'melee')
+    g = pass(g, 1)
+    g = pass(g, 0)
+    expect(g.round).toBe(2)
+    expect(g.leader).toBe(0)
+    expect(g.current).toBe(0)
+  })
+
   it('first to two round wins takes the game', () => {
     let g = gameWith(['pikeman', 'pikeman', 'militia'], ['militia', 'militia', 'militia'])
     // Round 1: P1 wins 6-4.

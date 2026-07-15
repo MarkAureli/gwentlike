@@ -19,7 +19,7 @@ You play against a simple greedy AI. Each round starts with a mulligan; after th
 - Each round opens with a mulligan: swap up to 3 cards in round 1, 1 card in rounds 2 and 3. Swapped cards are shuffled back after replacements are drawn, so they can't come straight back.
 - On your turn: play one card to your melee or ranged row, or pass. Passing locks you out for the rest of the round.
 - When both players have passed, the higher total power wins the round; a tie gives both players a round win. First to 2 round wins takes the game.
-- The round winner leads the next round.
+- The round winner leads the next round; after a tied round, the player who went second in it leads.
 - Deploy abilities resolve when a unit is played: single-target damage/boost, row damage/boost, and card draw.
 - Cards have provision costs in their definitions for future deckbuilding; both players currently use the same starter deck.
 

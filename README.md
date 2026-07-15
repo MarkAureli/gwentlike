@@ -11,7 +11,7 @@ npm install
 npm run dev
 ```
 
-You play against a simple greedy AI. Each round starts with a mulligan; after that, click a card, click one of your rows to place it, then pick a target if the card's deploy ability needs one. Pass to end your participation in the round.
+You play against a simple greedy AI. Each round starts with a mulligan; after that, click a card, then click a placement slot in one of your rows (or the row itself to place rightmost), then pick a target if the card's deploy ability needs one. Pass to end your participation in the round.
 
 ## Rules (current)
 
@@ -29,7 +29,7 @@ You play against a simple greedy AI. Each round starts with a mulligan; after th
   - **One entry point:** a game is a seed plus a list of `Move`s; `applyMove(state, move)` handles play, pass, and mulligan. This is the seam for replays, search-based AI, and multiplayer.
   - **Typed events:** everything that happens is appended to `state.events` as structured `GameEvent`s. Log text is derived via `events.ts`; the UI can also drive animations from them.
   - **Card instance identity:** every physical card gets an `iid` at game creation and keeps it through deck → hand → board → graveyard, so cards can be referenced anywhere.
-  - **Row positioning:** rows are ordered; the play move carries an optional insertion `position` (defaults to append), and `neighborsOf` exposes adjacency for future mechanics. The UI doesn't offer placement yet — when a mechanic needs it, only the UI changes.
+  - **Row positioning:** rows are ordered; the play move carries an optional insertion `position` (defaults to append), and `neighborsOf` exposes adjacency for future mechanics. The UI shows clickable insertion slots while placing.
 - `src/App.tsx` — React UI on top of the engine.
 
 ## Commands
@@ -46,6 +46,5 @@ Pushes to `main` deploy to GitHub Pages automatically (tests must pass).
 
 - More ability types (orders, timers, shields, spies/card advantage, adjacency effects)
 - Deckbuilding with provision limits and factions
-- Placement UI for positional play
 - Local hotseat mode, online multiplayer later
 - Smarter AI (search-based instead of greedy)

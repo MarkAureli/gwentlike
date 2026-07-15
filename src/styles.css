@@ -136,6 +136,28 @@ body {
   align-items: center;
 }
 
+.unit-slot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Insertion points shown while choosing where to place a card */
+.gap {
+  width: 16px;
+  height: 60px;
+  border: 1px dashed #d9a441;
+  border-radius: 4px;
+  background: rgba(217, 164, 65, 0.08);
+  cursor: pointer;
+  transition: width 0.08s ease, background 0.08s ease;
+}
+
+.gap:hover {
+  width: 26px;
+  background: rgba(217, 164, 65, 0.3);
+}
+
 /* Units on board */
 .unit {
   display: flex;

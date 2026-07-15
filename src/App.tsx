@@ -16,7 +16,7 @@ type TargetKind = 'enemyUnit' | 'allyUnit' | 'enemyRow'
 type UiState =
   | { step: 'idle' }
   | { step: 'chooseRow'; iid: number }
-  | { step: 'chooseTarget'; iid: number; row: RowKind; targetKind: TargetKind }
+  | { step: 'chooseTarget'; iid: number; row: RowKind; position: number; targetKind: TargetKind }
 
 function newGame(): GameState {
   return createGame(STARTER_DECK, STARTER_DECK, Math.floor(Math.random() * 2 ** 31))
@@ -90,8 +90,8 @@ export default function App() {
   const inMulligan = game.phase === 'mulligan'
   const humanCanAct = game.winner === null && game.current === HUMAN && (inMulligan || !me.passed)
 
-  function commitPlay(iid: number, row: RowKind, target?: Target) {
-    setGame((g) => applyMove(g, { kind: 'play', player: HUMAN, iid, row, target }))
+  function commitPlay(iid: number, row: RowKind, position: number, target?: Target) {
+    setGame((g) => applyMove(g, { kind: 'play', player: HUMAN, iid, row, position, target }))
     setUi({ step: 'idle' })
   }
 
@@ -117,30 +117,35 @@ export default function App() {
     setMulliganSel([])
   }
 
-  function onMyRowClick(row: RowKind) {
+  function onPlaceAt(row: RowKind, position: number) {
     if (ui.step !== 'chooseRow') return
     const card = me.hand.find((c) => c.iid === ui.iid)
     if (!card) return
     const kind = targetKindFor(game, card.defId)
-    if (kind) setUi({ step: 'chooseTarget', iid: ui.iid, row, targetKind: kind })
-    else commitPlay(ui.iid, row)
+    if (kind) setUi({ step: 'chooseTarget', iid: ui.iid, row, position, targetKind: kind })
+    else commitPlay(ui.iid, row, position)
+  }
+
+  function onMyRowClick(row: RowKind) {
+    // Clicking the row background appends to the right end.
+    onPlaceAt(row, game.players[HUMAN].rows[row].length)
   }
 
   function onEnemyRowClick(row: RowKind) {
     if (ui.step === 'chooseTarget' && ui.targetKind === 'enemyRow') {
-      commitPlay(ui.iid, ui.row, { player: AI, row })
+      commitPlay(ui.iid, ui.row, ui.position, { player: AI, row })
     }
   }
 
   function onEnemyUnitClick(row: RowKind, iid: number) {
     if (ui.step === 'chooseTarget' && ui.targetKind === 'enemyUnit') {
-      commitPlay(ui.iid, ui.row, { player: AI, row, iid })
+      commitPlay(ui.iid, ui.row, ui.position, { player: AI, row, iid })
     }
   }
 
   function onMyUnitClick(row: RowKind, iid: number) {
     if (ui.step === 'chooseTarget' && ui.targetKind === 'allyUnit') {
-      commitPlay(ui.iid, ui.row, { player: HUMAN, row, iid })
+      commitPlay(ui.iid, ui.row, ui.position, { player: HUMAN, row, iid })
     }
   }
 
@@ -188,13 +193,34 @@ export default function App() {
           <span className="row-total">{rowTotal(units)}</span>
         </div>
         <div className="row-units">
-          {units.map((u) => (
-            <UnitBadge
-              key={u.iid}
-              unit={u}
-              targetable={isMine ? allyUnitTargetable : enemyUnitTargetable}
-              onClick={() => (isMine ? onMyUnitClick(row, u.iid) : onEnemyUnitClick(row, u.iid))}
+          {placeable && (
+            <button
+              className="gap"
+              title="Place here"
+              onClick={(e) => {
+                e.stopPropagation()
+                onPlaceAt(row, 0)
+              }}
             />
+          )}
+          {units.map((u, i) => (
+            <span key={u.iid} className="unit-slot">
+              <UnitBadge
+                unit={u}
+                targetable={isMine ? allyUnitTargetable : enemyUnitTargetable}
+                onClick={() => (isMine ? onMyUnitClick(row, u.iid) : onEnemyUnitClick(row, u.iid))}
+              />
+              {placeable && (
+                <button
+                  className="gap"
+                  title="Place here"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onPlaceAt(row, i + 1)
+                  }}
+                />
+              )}
+            </span>
           ))}
         </div>
       </div>

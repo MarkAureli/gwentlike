@@ -18,8 +18,13 @@ export const INITIAL_DRAW = 10
 export const ROUND_DRAW = 3
 export const WINS_NEEDED = 2
 export const FINAL_ROUND = 3
-/** Mulligan allowance at the start of rounds 1, 2 and 3. */
-export const MULLIGANS_PER_ROUND = [3, 1, 1]
+/** Mulligan allowance each round: the round leader gets 3, the other player 2. */
+export const MULLIGANS_LEADER = 3
+export const MULLIGANS_FOLLOWER = 2
+
+export function mulliganAllowance(state: GameState, player: PlayerIndex): number {
+  return player === state.leader ? MULLIGANS_LEADER : MULLIGANS_FOLLOWER
+}
 
 function emit(state: GameState, e: GameEvent): void {
   state.events.push(e)
@@ -33,8 +38,21 @@ function makePlayer(deck: CardInstance[]): PlayerState {
     rows: { melee: [], ranged: [] },
     passed: false,
     roundWins: 0,
-    mulligansLeft: MULLIGANS_PER_ROUND[0],
+    mulligansLeft: 0,
     mulliganDone: false,
+    mulliganBlacklist: [],
+  }
+}
+
+/** Reset both players' mulligan state for the (new) current round. */
+function startMulliganPhase(state: GameState): void {
+  state.phase = 'mulligan'
+  state.current = state.leader
+  for (const player of [0, 1] as const) {
+    const p = state.players[player]
+    p.mulligansLeft = mulliganAllowance(state, player)
+    p.mulliganDone = false
+    p.mulliganBlacklist = []
   }
 }
 
@@ -75,6 +93,7 @@ export function createGame(deckA: string[], deckB: string[], seed: number): Game
       { type: 'roundStarted', round: 1, leader: first },
     ],
   }
+  startMulliganPhase(state)
   draw(state, 0, INITIAL_DRAW)
   draw(state, 1, INITIAL_DRAW)
   return state
@@ -285,41 +304,59 @@ function resolveRound(state: GameState): void {
       p.rows[row] = []
     }
     p.passed = false
-    p.mulliganDone = false
-    p.mulligansLeft = MULLIGANS_PER_ROUND[state.round - 1]
   }
   // The round winner leads the next round; on a tie, whoever went second.
   state.leader = roundWinner === 'draw' ? opponentOf(state.leader) : roundWinner
-  state.current = state.leader
-  state.phase = 'mulligan'
+  startMulliganPhase(state)
   emit(state, { type: 'roundStarted', round: state.round, leader: state.leader })
   draw(state, 0, ROUND_DRAW)
   draw(state, 1, ROUND_DRAW)
 }
 
+/** Swap a single hand card: shuffle it back (blacklisted) and draw a fresh one. */
 function doMulligan(state: GameState, move: Move & { kind: 'mulligan' }): void {
   if (state.phase !== 'mulligan') throw new Error('not in the mulligan phase')
   const p = state.players[move.player]
-  if (new Set(move.iids).size !== move.iids.length) throw new Error('duplicate mulligan targets')
-  if (move.iids.length > p.mulligansLeft) throw new Error('too many mulligans')
-  const returned = move.iids.map((iid) => {
-    const card = p.hand.find((c) => c.iid === iid)
-    if (!card) throw new Error('mulligan card not in hand')
-    return card
-  })
+  if (p.mulliganDone) throw new Error('mulligan already finished')
+  if (p.mulligansLeft <= 0) throw new Error('no mulligans left')
+  const handIndex = p.hand.findIndex((c) => c.iid === move.iid)
+  if (handIndex < 0) throw new Error('mulligan card not in hand')
 
-  p.hand = p.hand.filter((c) => !move.iids.includes(c.iid))
-  // Draw replacements before returning the swapped cards, so a swapped card
-  // can never be drawn straight back.
-  draw(state, move.player, returned.length)
-  const r = shuffle([...p.deck, ...returned], state.rng)
+  const [card] = p.hand.splice(handIndex, 1)
+  p.mulliganBlacklist.push(card.iid)
+  const r = shuffle([...p.deck, card], state.rng)
   p.deck = r.items
   state.rng = r.state
-  p.mulligansLeft -= move.iids.length
-  p.mulliganDone = true
-  emit(state, { type: 'mulliganed', player: move.player, count: move.iids.length })
+  emit(state, { type: 'mulliganed', player: move.player, iid: card.iid, defId: card.defId })
 
-  const other = opponentOf(move.player)
+  // Draw the top-most card that wasn't swapped away this phase.
+  const drawIndex = p.deck.findIndex((c) => !p.mulliganBlacklist.includes(c.iid))
+  if (drawIndex >= 0 && p.hand.length < HAND_LIMIT) {
+    const [drawn] = p.deck.splice(drawIndex, 1)
+    p.hand.push(drawn)
+    emit(state, { type: 'drew', player: move.player, iid: drawn.iid, defId: drawn.defId })
+  }
+
+  p.mulligansLeft--
+  if (p.mulligansLeft === 0) finishMulligan(state, move.player)
+}
+
+function doEndMulligan(state: GameState, move: Move & { kind: 'endMulligan' }): void {
+  if (state.phase !== 'mulligan') throw new Error('not in the mulligan phase')
+  if (state.players[move.player].mulliganDone) throw new Error('mulligan already finished')
+  finishMulligan(state, move.player)
+}
+
+function finishMulligan(state: GameState, player: PlayerIndex): void {
+  const p = state.players[player]
+  p.mulliganDone = true
+  p.mulliganBlacklist = []
+  emit(state, {
+    type: 'mulliganEnded',
+    player,
+    swapped: mulliganAllowance(state, player) - p.mulligansLeft,
+  })
+  const other = opponentOf(player)
   if (!state.players[other].mulliganDone) state.current = other
   else beginPlayPhase(state)
 }
@@ -364,6 +401,9 @@ export function applyMove(state: GameState, move: Move): GameState {
   switch (move.kind) {
     case 'mulligan':
       doMulligan(next, move)
+      break
+    case 'endMulligan':
+      doEndMulligan(next, move)
       break
     case 'play':
       doPlay(next, move)

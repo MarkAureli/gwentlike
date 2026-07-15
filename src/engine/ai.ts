@@ -31,13 +31,14 @@ function cardValue(card: CardInstance): number {
 
 function chooseMulligan(state: GameState, me: PlayerIndex): Move {
   const p = state.players[me]
-  const limit = Math.min(p.mulligansLeft, p.deck.length)
-  const iids = p.hand
-    .filter((c) => cardValue(c) < MULLIGAN_THRESHOLD)
-    .sort((a, b) => cardValue(a) - cardValue(b))
-    .slice(0, limit)
-    .map((c) => c.iid)
-  return { kind: 'mulligan', player: me, iids }
+  const canDraw = p.deck.some((c) => !p.mulliganBlacklist.includes(c.iid))
+  if (p.mulligansLeft > 0 && canDraw) {
+    const worst = [...p.hand].sort((a, b) => cardValue(a) - cardValue(b))[0]
+    if (worst && cardValue(worst) < MULLIGAN_THRESHOLD) {
+      return { kind: 'mulligan', player: me, iid: worst.iid }
+    }
+  }
+  return { kind: 'endMulligan', player: me }
 }
 
 function scoreCard(state: GameState, me: PlayerIndex, card: CardInstance): ScoredMove {

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { chooseMove } from './engine/ai'
 import { abilityText, CARD_DEFS, STARTER_DECK } from './engine/cards'
 import { describeEvent } from './engine/events'
-import { applyMove, createGame, hasLegalTarget, playerTotal, rowTotal } from './engine/game'
+import { applyMove, createGame, hasLegalTarget, mulliganAllowance, playerTotal, rowTotal } from './engine/game'
 import type { CardInstance, GameState, RowKind, Target, Unit } from './engine/types'
 
 const HUMAN = 0 as const
@@ -57,7 +57,6 @@ function UnitBadge(props: { unit: Unit; targetable: boolean; onClick?: () => voi
 export default function App() {
   const [game, setGame] = useState(newGame)
   const [ui, setUi] = useState<UiState>({ step: 'idle' })
-  const [mulliganSel, setMulliganSel] = useState<number[]>([])
   const [drawnFlash, setDrawnFlash] = useState<number[]>([])
   const seenEvents = useRef(game.events.length)
 
@@ -98,23 +97,17 @@ export default function App() {
   function onHandClick(card: CardInstance) {
     if (!humanCanAct) return
     if (inMulligan) {
-      setMulliganSel((sel) =>
-        sel.includes(card.iid)
-          ? sel.filter((iid) => iid !== card.iid)
-          : sel.length < me.mulligansLeft
-            ? [...sel, card.iid]
-            : sel,
-      )
+      // One click = one swap; the replacement arrives (and flashes) immediately.
+      setGame((g) => applyMove(g, { kind: 'mulligan', player: HUMAN, iid: card.iid }))
       return
     }
     if (ui.step !== 'idle' && ui.iid === card.iid) setUi({ step: 'idle' })
     else setUi({ step: 'chooseRow', iid: card.iid })
   }
 
-  function onConfirmMulligan() {
+  function onEndMulligan() {
     if (!humanCanAct || !inMulligan) return
-    setGame((g) => applyMove(g, { kind: 'mulligan', player: HUMAN, iids: mulliganSel }))
-    setMulliganSel([])
+    setGame((g) => applyMove(g, { kind: 'endMulligan', player: HUMAN }))
   }
 
   function onPlaceAt(row: RowKind, position: number) {
@@ -162,7 +155,7 @@ export default function App() {
 
   const hint = inMulligan
     ? humanCanAct
-      ? `Mulligan: select up to ${me.mulligansLeft} card${me.mulligansLeft === 1 ? '' : 's'} to swap, then confirm.`
+      ? `Mulligan: click a card to swap it (${me.mulligansLeft} swap${me.mulligansLeft === 1 ? '' : 's'} left), or finish.`
       : 'Opponent is choosing their mulligan…'
     : ui.step === 'chooseRow'
       ? 'Choose one of your rows to play this card.'
@@ -268,9 +261,7 @@ export default function App() {
         <div className="hand">
           {me.hand.map((card) => {
             const def = CARD_DEFS[card.defId]
-            const selected = inMulligan
-              ? mulliganSel.includes(card.iid)
-              : ui.step !== 'idle' && ui.iid === card.iid
+            const selected = !inMulligan && ui.step !== 'idle' && ui.iid === card.iid
             const justDrawn = drawnFlash.includes(card.iid)
             return (
               <button
@@ -287,8 +278,8 @@ export default function App() {
           })}
         </div>
         {inMulligan ? (
-          <button className="pass-button" onClick={onConfirmMulligan} disabled={!humanCanAct}>
-            {mulliganSel.length === 0 ? 'Keep hand' : `Swap ${mulliganSel.length}`}
+          <button className="pass-button" onClick={onEndMulligan} disabled={!humanCanAct}>
+            {me.mulligansLeft === mulliganAllowance(game, HUMAN) ? 'Keep hand' : 'Done'}
           </button>
         ) : (
           <button className="pass-button" onClick={onPass} disabled={!humanCanAct}>
@@ -314,7 +305,6 @@ export default function App() {
               className="pass-button"
               onClick={() => {
                 setUi({ step: 'idle' })
-                setMulliganSel([])
                 setGame(newGame())
               }}
             >

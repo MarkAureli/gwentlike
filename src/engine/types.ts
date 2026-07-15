@@ -44,6 +44,8 @@ export interface PlayerState {
   roundWins: number
   mulligansLeft: number
   mulliganDone: boolean
+  /** iids swapped away this mulligan phase — they cannot be redrawn until it ends */
+  mulliganBlacklist: number[]
 }
 
 export interface Target {
@@ -61,7 +63,8 @@ export interface Target {
 export type Move =
   | { kind: 'play'; player: PlayerIndex; iid: number; row: RowKind; position?: number; target?: Target }
   | { kind: 'pass'; player: PlayerIndex }
-  | { kind: 'mulligan'; player: PlayerIndex; iids: number[] }
+  | { kind: 'mulligan'; player: PlayerIndex; iid: number } // swap one card
+  | { kind: 'endMulligan'; player: PlayerIndex } // keep the rest of the hand
 
 /**
  * Everything that happens is recorded as a typed event. The UI derives its
@@ -70,7 +73,8 @@ export type Move =
 export type GameEvent =
   | { type: 'gameStarted'; first: PlayerIndex }
   | { type: 'roundStarted'; round: number; leader: PlayerIndex }
-  | { type: 'mulliganed'; player: PlayerIndex; count: number }
+  | { type: 'mulliganed'; player: PlayerIndex; iid: number; defId: string }
+  | { type: 'mulliganEnded'; player: PlayerIndex; swapped: number }
   | { type: 'played'; player: PlayerIndex; iid: number; defId: string; row: RowKind; position: number }
   | { type: 'drew'; player: PlayerIndex; iid: number; defId: string }
   | { type: 'drawFailed'; player: PlayerIndex; sourceDefId: string }

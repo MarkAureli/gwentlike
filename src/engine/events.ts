@@ -16,9 +16,11 @@ export function describeEvent(e: GameEvent): string {
     case 'roundStarted':
       return `Round ${e.round} — Player ${e.leader + 1} goes first.`
     case 'mulliganed':
-      return e.count === 0
+      return `Player ${e.player + 1} swaps a card.`
+    case 'mulliganEnded':
+      return e.swapped === 0
         ? `Player ${e.player + 1} keeps their hand.`
-        : `Player ${e.player + 1} mulligans ${e.count} card${e.count === 1 ? '' : 's'}.`
+        : `Player ${e.player + 1} ends their mulligan (${e.swapped} swapped).`
     case 'played':
       return `Player ${e.player + 1} plays ${name(e.defId)} to the ${e.row} row.`
     case 'drew':

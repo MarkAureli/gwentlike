@@ -5,8 +5,10 @@ import {
   applyMove,
   createGame,
   HAND_LIMIT,
-  MULLIGANS_PER_ROUND,
+  MULLIGANS_FOLLOWER,
+  MULLIGANS_LEADER,
   neighborsOf,
+  opponentOf,
   playerTotal,
 } from './game'
 import type { CardInstance, GameState, PlayerIndex, RowKind, Target } from './types'
@@ -40,7 +42,7 @@ function pass(g: GameState, player: PlayerIndex): GameState {
 
 function skipMulligans(g: GameState): GameState {
   while (g.phase === 'mulligan' && g.winner === null) {
-    g = applyMove(g, { kind: 'mulligan', player: g.current, iids: [] })
+    g = applyMove(g, { kind: 'endMulligan', player: g.current })
   }
   return g
 }
@@ -51,9 +53,10 @@ describe('createGame', () => {
     for (const p of g.players) {
       expect(p.hand).toHaveLength(10)
       expect(p.deck).toHaveLength(15)
-      expect(p.mulligansLeft).toBe(MULLIGANS_PER_ROUND[0])
       expect(p.mulliganDone).toBe(false)
     }
+    expect(g.players[g.leader].mulligansLeft).toBe(MULLIGANS_LEADER)
+    expect(g.players[opponentOf(g.leader)].mulligansLeft).toBe(MULLIGANS_FOLLOWER)
     expect(g.phase).toBe('mulligan')
     expect(g.round).toBe(1)
     expect(g.winner).toBeNull()
@@ -74,39 +77,62 @@ describe('createGame', () => {
 })
 
 describe('mulligan', () => {
-  it('swaps selected cards for fresh draws and returns them to the deck', () => {
+  it('swaps one card at a time and keeps control until finished', () => {
     const g0 = createGame(STARTER_DECK, STARTER_DECK, 3)
     const me = g0.current
-    const swapped = g0.players[me].hand.slice(0, 2)
-    const g = applyMove(g0, { kind: 'mulligan', player: me, iids: swapped.map((c) => c.iid) })
+    const swapped = g0.players[me].hand[0]
+    const g = applyMove(g0, { kind: 'mulligan', player: me, iid: swapped.iid })
     const p = g.players[me]
-    expect(p.hand).toHaveLength(10)
+    expect(p.hand).toHaveLength(10) // one out, one replacement in
     expect(p.deck).toHaveLength(15)
-    for (const card of swapped) {
-      expect(p.hand.some((c) => c.iid === card.iid)).toBe(false)
-      expect(p.deck.some((c) => c.iid === card.iid)).toBe(true)
-    }
-    expect(p.mulliganDone).toBe(true)
-    expect(g.events.at(-1)).toEqual({ type: 'mulliganed', player: me, count: 2 })
+    expect(p.hand.some((c) => c.iid === swapped.iid)).toBe(false)
+    expect(p.deck.some((c) => c.iid === swapped.iid)).toBe(true)
+    expect(p.mulligansLeft).toBe(MULLIGANS_LEADER - 1)
+    expect(p.mulliganDone).toBe(false)
+    expect(g.current).toBe(me) // still this player's mulligan
   })
 
-  it('enforces the allowance and rejects duplicates', () => {
-    const g = createGame(STARTER_DECK, STARTER_DECK, 3)
+  it('never redraws a card swapped away in the same mulligan phase', () => {
+    let g = createGame(STARTER_DECK, STARTER_DECK, 3)
     const me = g.current
-    const iids = g.players[me].hand.slice(0, 4).map((c) => c.iid)
-    expect(() => applyMove(g, { kind: 'mulligan', player: me, iids })).toThrow('too many')
-    expect(() =>
-      applyMove(g, { kind: 'mulligan', player: me, iids: [iids[0], iids[0]] }),
-    ).toThrow('duplicate')
+    // Rig the deck to a single card X so draws are fully predictable.
+    const x: CardInstance = { iid: 900, defId: 'champion' }
+    g.players[me].deck = [x]
+    const a = g.players[me].hand[0]
+    g = applyMove(g, { kind: 'mulligan', player: me, iid: a.iid })
+    let p = g.players[me]
+    // The replacement must be X; A sits in the deck but is blacklisted.
+    expect(p.hand.at(-1)!.iid).toBe(x.iid)
+    expect(p.deck.map((c) => c.iid)).toEqual([a.iid])
+    // Swap X — a card drawn during this very mulligan — right back out.
+    // The deck now holds only blacklisted cards, so nothing is drawn.
+    g = applyMove(g, { kind: 'mulligan', player: me, iid: x.iid })
+    p = g.players[me]
+    expect(p.hand).toHaveLength(9)
+    expect(p.hand.some((c) => c.iid === a.iid || c.iid === x.iid)).toBe(false)
+    expect(p.deck).toHaveLength(2)
   })
 
-  it('moves to the play phase once both players are done, leader first', () => {
+  it('finishes automatically after the last allowed swap', () => {
+    let g = createGame(STARTER_DECK, STARTER_DECK, 3)
+    const me = g.current // the leader: 3 swaps
+    for (let i = 0; i < MULLIGANS_LEADER; i++) {
+      expect(g.current).toBe(me)
+      g = applyMove(g, { kind: 'mulligan', player: me, iid: g.players[me].hand[0].iid })
+    }
+    expect(g.players[me].mulliganDone).toBe(true)
+    expect(g.players[me].mulliganBlacklist).toEqual([]) // cleared when done
+    expect(g.current).toBe(opponentOf(me))
+    expect(g.players[opponentOf(me)].mulligansLeft).toBe(MULLIGANS_FOLLOWER)
+  })
+
+  it('moves to the play phase once both players finish, leader first', () => {
     let g = createGame(STARTER_DECK, STARTER_DECK, 3)
     const leader = g.leader
-    g = applyMove(g, { kind: 'mulligan', player: g.current, iids: [] })
+    g = applyMove(g, { kind: 'endMulligan', player: g.current })
     expect(g.phase).toBe('mulligan')
-    expect(g.current).toBe(leader === 0 ? 1 : 0)
-    g = applyMove(g, { kind: 'mulligan', player: g.current, iids: [] })
+    expect(g.current).toBe(opponentOf(leader))
+    g = applyMove(g, { kind: 'endMulligan', player: g.current })
     expect(g.phase).toBe('play')
     expect(g.current).toBe(leader)
   })
@@ -119,9 +145,12 @@ describe('mulligan', () => {
     expect(() => applyMove(g, { kind: 'pass', player: me })).toThrow('not in the play phase')
   })
 
-  it('rejects mulligans during the play phase', () => {
+  it('rejects mulligan moves during the play phase', () => {
     const g = gameWith(['militia'], ['militia'])
-    expect(() => applyMove(g, { kind: 'mulligan', player: 0, iids: [] })).toThrow('not in the mulligan phase')
+    expect(() =>
+      applyMove(g, { kind: 'mulligan', player: 0, iid: g.players[0].hand[0].iid }),
+    ).toThrow('not in the mulligan phase')
+    expect(() => applyMove(g, { kind: 'endMulligan', player: 0 })).toThrow('not in the mulligan phase')
   })
 })
 
@@ -259,10 +288,11 @@ describe('rounds and game end', () => {
     expect(g.players[0].rows.melee).toHaveLength(0)
     expect(g.players[0].graveyard.some((c) => c.defId === 'pikeman')).toBe(true)
     expect(g.players[0].passed).toBe(false)
-    // Round winner leads the next round, which starts with a 1-card mulligan.
+    // Round winner leads the next round and gets the leader's 3 mulligans.
     expect(g.phase).toBe('mulligan')
     expect(g.current).toBe(0)
-    expect(g.players[0].mulligansLeft).toBe(MULLIGANS_PER_ROUND[1])
+    expect(g.players[0].mulligansLeft).toBe(MULLIGANS_LEADER)
+    expect(g.players[1].mulligansLeft).toBe(MULLIGANS_FOLLOWER)
   })
 
   it('a drawn round gives both players a round win', () => {
@@ -361,14 +391,16 @@ describe('AI', () => {
     expect(chooseMove(g, 1)).toEqual({ kind: 'pass', player: 1 })
   })
 
-  it('mulligans only weak cards within the allowance', () => {
-    const g = createGame(STARTER_DECK, STARTER_DECK, 3)
-    const me = g.current
-    const move = chooseMove(g, me)
-    if (move.kind !== 'mulligan') throw new Error('expected a mulligan move')
-    expect(move.iids.length).toBeLessThanOrEqual(g.players[me].mulligansLeft)
-    for (const iid of move.iids) {
-      expect(g.players[me].hand.some((c) => c.iid === iid)).toBe(true)
+  it('makes legal mulligan moves and always reaches the play phase', () => {
+    for (const seed of [3, 8, 21]) {
+      let g = createGame(STARTER_DECK, STARTER_DECK, seed)
+      let steps = 0
+      while (g.phase === 'mulligan' && steps++ < 20) {
+        const move = chooseMove(g, g.current)
+        expect(['mulligan', 'endMulligan']).toContain(move.kind)
+        g = applyMove(g, move)
+      }
+      expect(g.phase).toBe('play')
     }
   })
 

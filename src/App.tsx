@@ -6,7 +6,8 @@ import type { GameState, RowKind, Target, Unit } from './engine/types'
 
 const HUMAN = 0 as const
 const AI = 1 as const
-const AI_DELAY_MS = 800
+const AI_DELAY_MS = 1600
+const DRAW_FLASH_MS = 2000
 
 type TargetKind = 'enemyUnit' | 'allyUnit' | 'enemyRow'
 
@@ -53,6 +54,13 @@ function UnitBadge(props: { unit: Unit; targetable: boolean; onClick?: () => voi
 export default function App() {
   const [game, setGame] = useState(newGame)
   const [ui, setUi] = useState<UiState>({ step: 'idle' })
+  const [drawnFlash, setDrawnFlash] = useState<number | null>(null)
+
+  useEffect(() => {
+    if (drawnFlash === null) return
+    const t = setTimeout(() => setDrawnFlash(null), DRAW_FLASH_MS)
+    return () => clearTimeout(t)
+  }, [drawnFlash])
 
   useEffect(() => {
     if (game.winner !== null || game.current !== AI) return
@@ -71,8 +79,15 @@ export default function App() {
   const humanCanAct = game.winner === null && game.current === HUMAN && !me.passed
 
   function commitPlay(handIndex: number, row: RowKind, target?: Target) {
-    setGame((g) => playCard(g, HUMAN, handIndex, row, target))
+    const next = playCard(game, HUMAN, handIndex, row, target)
+    // Played one card yet the hand is the same size within the same round:
+    // a card was drawn, and draws always land at the end of the hand.
+    const drew =
+      next.round === game.round &&
+      next.players[HUMAN].hand.length === game.players[HUMAN].hand.length
+    setGame(next)
     setUi({ step: 'idle' })
+    setDrawnFlash(drew ? next.players[HUMAN].hand.length - 1 : null)
   }
 
   function onHandClick(i: number) {
@@ -197,10 +212,11 @@ export default function App() {
           {me.hand.map((defId, i) => {
             const def = CARD_DEFS[defId]
             const selected = ui.step !== 'idle' && ui.handIndex === i
+            const justDrawn = drawnFlash === i
             return (
               <button
                 key={i}
-                className={`card ${selected ? 'selected' : ''}`}
+                className={`card ${selected ? 'selected' : ''} ${justDrawn ? 'just-drawn' : ''}`}
                 onClick={() => onHandClick(i)}
                 disabled={!humanCanAct}
               >

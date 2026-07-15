@@ -88,6 +88,45 @@ describe('playCard', () => {
     expect(g.players[0].deck).toHaveLength(deckBefore - 1)
     expect(g.players[0].hand).toHaveLength(2) // militia + drawn card
   })
+
+  it('scholar draws even from a full 10-card opening hand', () => {
+    const g0 = createGame(STARTER_DECK, STARTER_DECK, 5)
+    g0.players[0].hand = ['scholar', ...Array(9).fill('militia')]
+    g0.current = 0
+    g0.leader = 0
+    const expectedDraw = g0.players[0].deck[0]
+    const g = playCard(g0, 0, 0, 'ranged')
+    // Played one, drew one: hand stays at 10, deck shrinks, drawn card is last.
+    expect(g.players[0].hand).toHaveLength(10)
+    expect(g.players[0].deck).toHaveLength(14)
+    expect(g.players[0].hand[9]).toBe(expectedDraw)
+  })
+
+  it('every scholar play in AI self-play draws exactly one card', () => {
+    let scholarPlays = 0
+    for (let seed = 1; seed <= 20; seed++) {
+      let g = createGame(STARTER_DECK, STARTER_DECK, seed)
+      for (let i = 0; i < 300 && g.winner === null; i++) {
+        const me = g.current
+        const move = chooseMove(g, me)
+        if (move.kind === 'pass') {
+          g = pass(g, me)
+          continue
+        }
+        const isScholar = g.players[me].hand[move.handIndex] === 'scholar'
+        const handBefore = g.players[me].hand.length
+        const deckBefore = g.players[me].deck.length
+        const roundBefore = g.round
+        g = playCard(g, me, move.handIndex, move.row, move.target)
+        if (isScholar && g.round === roundBefore) {
+          scholarPlays++
+          expect(g.players[me].deck).toHaveLength(deckBefore - 1)
+          expect(g.players[me].hand).toHaveLength(handBefore) // -1 played, +1 drawn
+        }
+      }
+    }
+    expect(scholarPlays).toBeGreaterThan(0)
+  })
 })
 
 describe('rounds and game end', () => {

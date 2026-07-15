@@ -142,8 +142,10 @@ function resolveDeploy(state: GameState, player: PlayerIndex, played: Unit, row:
       break
     }
     case 'draw': {
+      const before = state.players[player].hand.length
       draw(state, player, 1)
-      state.log.push(`${played.name} draws a card.`)
+      const drawn = state.players[player].hand.length > before
+      state.log.push(drawn ? `${played.name} draws a card.` : `${played.name} has nothing to draw.`)
       break
     }
   }

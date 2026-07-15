@@ -241,6 +241,27 @@ body {
   cursor: default;
 }
 
+.card.just-drawn {
+  animation: drawn-glow 2s ease-out;
+}
+
+@keyframes drawn-glow {
+  0% {
+    border-color: #6fbf6f;
+    box-shadow: 0 0 16px rgba(111, 191, 111, 0.9);
+    transform: translateY(-8px);
+  }
+  70% {
+    border-color: #6fbf6f;
+    box-shadow: 0 0 10px rgba(111, 191, 111, 0.5);
+  }
+  100% {
+    border-color: #4a3f2c;
+    box-shadow: none;
+    transform: none;
+  }
+}
+
 .card.selected {
   border-color: #d9a441;
   box-shadow: 0 0 10px rgba(217, 164, 65, 0.5);

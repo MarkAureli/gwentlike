@@ -1,20 +1,22 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { chooseMove } from './engine/ai'
 import { abilityText, CARD_DEFS, STARTER_DECK } from './engine/cards'
-import { createGame, hasLegalTarget, pass, playCard, playerTotal, rowTotal } from './engine/game'
-import type { GameState, RowKind, Target, Unit } from './engine/types'
+import { describeEvent } from './engine/events'
+import { applyMove, createGame, hasLegalTarget, playerTotal, rowTotal } from './engine/game'
+import type { CardInstance, GameState, RowKind, Target, Unit } from './engine/types'
 
 const HUMAN = 0 as const
 const AI = 1 as const
 const AI_DELAY_MS = 1600
+const AI_MULLIGAN_DELAY_MS = 700
 const DRAW_FLASH_MS = 2000
 
 type TargetKind = 'enemyUnit' | 'allyUnit' | 'enemyRow'
 
 type UiState =
   | { step: 'idle' }
-  | { step: 'chooseRow'; handIndex: number }
-  | { step: 'chooseTarget'; handIndex: number; row: RowKind; targetKind: TargetKind }
+  | { step: 'chooseRow'; iid: number }
+  | { step: 'chooseTarget'; iid: number; row: RowKind; targetKind: TargetKind }
 
 function newGame(): GameState {
   return createGame(STARTER_DECK, STARTER_DECK, Math.floor(Math.random() * 2 ** 31))
@@ -37,16 +39,17 @@ function targetKindFor(state: GameState, defId: string): TargetKind | null {
 
 function UnitBadge(props: { unit: Unit; targetable: boolean; onClick?: () => void }) {
   const { unit, targetable, onClick } = props
+  const def = CARD_DEFS[unit.defId]
   const powerClass = unit.power > unit.basePower ? 'boosted' : unit.power < unit.basePower ? 'damaged' : ''
   return (
     <button
       className={`unit ${targetable ? 'targetable' : ''}`}
       onClick={onClick}
       disabled={!targetable}
-      title={abilityText(CARD_DEFS[unit.defId].deploy)}
+      title={abilityText(def.deploy)}
     >
       <span className={`unit-power ${powerClass}`}>{unit.power}</span>
-      <span className="unit-name">{unit.name}</span>
+      <span className="unit-name">{def.name}</span>
     </button>
   )
 }
@@ -54,77 +57,97 @@ function UnitBadge(props: { unit: Unit; targetable: boolean; onClick?: () => voi
 export default function App() {
   const [game, setGame] = useState(newGame)
   const [ui, setUi] = useState<UiState>({ step: 'idle' })
-  const [drawnFlash, setDrawnFlash] = useState<number | null>(null)
+  const [mulliganSel, setMulliganSel] = useState<number[]>([])
+  const [drawnFlash, setDrawnFlash] = useState<number[]>([])
+  const seenEvents = useRef(game.events.length)
+
+  // Flash cards newly drawn into the human hand, based on fresh 'drew' events.
+  useEffect(() => {
+    const fresh = game.events.slice(seenEvents.current)
+    seenEvents.current = game.events.length
+    const drawn = fresh.flatMap((e) => (e.type === 'drew' && e.player === HUMAN ? [e.iid] : []))
+    if (drawn.length > 0) setDrawnFlash(drawn)
+  }, [game])
 
   useEffect(() => {
-    if (drawnFlash === null) return
-    const t = setTimeout(() => setDrawnFlash(null), DRAW_FLASH_MS)
+    if (drawnFlash.length === 0) return
+    const t = setTimeout(() => setDrawnFlash([]), DRAW_FLASH_MS)
     return () => clearTimeout(t)
   }, [drawnFlash])
 
+  // The AI takes its turn (mulligan or play) after a thinking pause.
   useEffect(() => {
     if (game.winner !== null || game.current !== AI) return
+    const delay = game.phase === 'mulligan' ? AI_MULLIGAN_DELAY_MS : AI_DELAY_MS
     const t = setTimeout(() => {
-      setGame((g) => {
-        if (g.winner !== null || g.current !== AI) return g
-        const move = chooseMove(g, AI)
-        return move.kind === 'pass' ? pass(g, AI) : playCard(g, AI, move.handIndex, move.row, move.target)
-      })
-    }, AI_DELAY_MS)
+      setGame((g) => (g.winner === null && g.current === AI ? applyMove(g, chooseMove(g, AI)) : g))
+    }, delay)
     return () => clearTimeout(t)
   }, [game])
 
   const me = game.players[HUMAN]
   const foe = game.players[AI]
-  const humanCanAct = game.winner === null && game.current === HUMAN && !me.passed
+  const inMulligan = game.phase === 'mulligan'
+  const humanCanAct = game.winner === null && game.current === HUMAN && (inMulligan || !me.passed)
 
-  function commitPlay(handIndex: number, row: RowKind, target?: Target) {
-    const next = playCard(game, HUMAN, handIndex, row, target)
-    // Played one card yet the hand is the same size within the same round:
-    // a card was drawn, and draws always land at the end of the hand.
-    const drew =
-      next.round === game.round &&
-      next.players[HUMAN].hand.length === game.players[HUMAN].hand.length
-    setGame(next)
+  function commitPlay(iid: number, row: RowKind, target?: Target) {
+    setGame((g) => applyMove(g, { kind: 'play', player: HUMAN, iid, row, target }))
     setUi({ step: 'idle' })
-    setDrawnFlash(drew ? next.players[HUMAN].hand.length - 1 : null)
   }
 
-  function onHandClick(i: number) {
+  function onHandClick(card: CardInstance) {
     if (!humanCanAct) return
-    if (ui.step !== 'idle' && ui.handIndex === i) setUi({ step: 'idle' })
-    else setUi({ step: 'chooseRow', handIndex: i })
+    if (inMulligan) {
+      setMulliganSel((sel) =>
+        sel.includes(card.iid)
+          ? sel.filter((iid) => iid !== card.iid)
+          : sel.length < me.mulligansLeft
+            ? [...sel, card.iid]
+            : sel,
+      )
+      return
+    }
+    if (ui.step !== 'idle' && ui.iid === card.iid) setUi({ step: 'idle' })
+    else setUi({ step: 'chooseRow', iid: card.iid })
+  }
+
+  function onConfirmMulligan() {
+    if (!humanCanAct || !inMulligan) return
+    setGame((g) => applyMove(g, { kind: 'mulligan', player: HUMAN, iids: mulliganSel }))
+    setMulliganSel([])
   }
 
   function onMyRowClick(row: RowKind) {
     if (ui.step !== 'chooseRow') return
-    const kind = targetKindFor(game, me.hand[ui.handIndex])
-    if (kind) setUi({ step: 'chooseTarget', handIndex: ui.handIndex, row, targetKind: kind })
-    else commitPlay(ui.handIndex, row)
+    const card = me.hand.find((c) => c.iid === ui.iid)
+    if (!card) return
+    const kind = targetKindFor(game, card.defId)
+    if (kind) setUi({ step: 'chooseTarget', iid: ui.iid, row, targetKind: kind })
+    else commitPlay(ui.iid, row)
   }
 
   function onEnemyRowClick(row: RowKind) {
     if (ui.step === 'chooseTarget' && ui.targetKind === 'enemyRow') {
-      commitPlay(ui.handIndex, ui.row, { player: AI, row })
+      commitPlay(ui.iid, ui.row, { player: AI, row })
     }
   }
 
-  function onEnemyUnitClick(row: RowKind, uid: number) {
+  function onEnemyUnitClick(row: RowKind, iid: number) {
     if (ui.step === 'chooseTarget' && ui.targetKind === 'enemyUnit') {
-      commitPlay(ui.handIndex, ui.row, { player: AI, row, uid })
+      commitPlay(ui.iid, ui.row, { player: AI, row, iid })
     }
   }
 
-  function onMyUnitClick(row: RowKind, uid: number) {
+  function onMyUnitClick(row: RowKind, iid: number) {
     if (ui.step === 'chooseTarget' && ui.targetKind === 'allyUnit') {
-      commitPlay(ui.handIndex, ui.row, { player: HUMAN, row, uid })
+      commitPlay(ui.iid, ui.row, { player: HUMAN, row, iid })
     }
   }
 
   function onPass() {
-    if (!humanCanAct) return
+    if (!humanCanAct || inMulligan) return
     setUi({ step: 'idle' })
-    setGame((g) => pass(g, HUMAN))
+    setGame((g) => applyMove(g, { kind: 'pass', player: HUMAN }))
   }
 
   const enemyRowTargetable = ui.step === 'chooseTarget' && ui.targetKind === 'enemyRow'
@@ -132,8 +155,11 @@ export default function App() {
   const allyUnitTargetable = ui.step === 'chooseTarget' && ui.targetKind === 'allyUnit'
   const rowChoosable = ui.step === 'chooseRow'
 
-  const hint =
-    ui.step === 'chooseRow'
+  const hint = inMulligan
+    ? humanCanAct
+      ? `Mulligan: select up to ${me.mulligansLeft} card${me.mulligansLeft === 1 ? '' : 's'} to swap, then confirm.`
+      : 'Opponent is choosing their mulligan…'
+    : ui.step === 'chooseRow'
       ? 'Choose one of your rows to play this card.'
       : ui.step === 'chooseTarget'
         ? ui.targetKind === 'enemyUnit'
@@ -164,16 +190,18 @@ export default function App() {
         <div className="row-units">
           {units.map((u) => (
             <UnitBadge
-              key={u.uid}
+              key={u.iid}
               unit={u}
               targetable={isMine ? allyUnitTargetable : enemyUnitTargetable}
-              onClick={() => (isMine ? onMyUnitClick(row, u.uid) : onEnemyUnitClick(row, u.uid))}
+              onClick={() => (isMine ? onMyUnitClick(row, u.iid) : onEnemyUnitClick(row, u.iid))}
             />
           ))}
         </div>
       </div>
     )
   }
+
+  const visibleLog = game.events.filter((e) => e.type !== 'drew').slice(-4)
 
   return (
     <div className="app">
@@ -184,7 +212,10 @@ export default function App() {
           <span className="meta">hand {foe.hand.length} · deck {foe.deck.length} {foe.passed ? '· PASSED' : ''}</span>
           <span className="total">{playerTotal(foe)}</span>
         </div>
-        <div className="round-indicator">Round {game.round}</div>
+        <div className="round-indicator">
+          Round {game.round}
+          {inMulligan ? ' · Mulligan' : ''}
+        </div>
         <div className="score">
           <span className="player-tag">You</span>
           <span className="crowns">{'●'.repeat(me.roundWins)}{'○'.repeat(2 - Math.min(2, me.roundWins))}</span>
@@ -209,15 +240,17 @@ export default function App() {
 
       <footer className="hand-area">
         <div className="hand">
-          {me.hand.map((defId, i) => {
-            const def = CARD_DEFS[defId]
-            const selected = ui.step !== 'idle' && ui.handIndex === i
-            const justDrawn = drawnFlash === i
+          {me.hand.map((card) => {
+            const def = CARD_DEFS[card.defId]
+            const selected = inMulligan
+              ? mulliganSel.includes(card.iid)
+              : ui.step !== 'idle' && ui.iid === card.iid
+            const justDrawn = drawnFlash.includes(card.iid)
             return (
               <button
-                key={i}
+                key={card.iid}
                 className={`card ${selected ? 'selected' : ''} ${justDrawn ? 'just-drawn' : ''}`}
-                onClick={() => onHandClick(i)}
+                onClick={() => onHandClick(card)}
                 disabled={!humanCanAct}
               >
                 <span className="card-power">{def.power}</span>
@@ -227,14 +260,20 @@ export default function App() {
             )
           })}
         </div>
-        <button className="pass-button" onClick={onPass} disabled={!humanCanAct}>
-          Pass
-        </button>
+        {inMulligan ? (
+          <button className="pass-button" onClick={onConfirmMulligan} disabled={!humanCanAct}>
+            {mulliganSel.length === 0 ? 'Keep hand' : `Swap ${mulliganSel.length}`}
+          </button>
+        ) : (
+          <button className="pass-button" onClick={onPass} disabled={!humanCanAct}>
+            Pass
+          </button>
+        )}
       </footer>
 
       <div className="log">
-        {game.log.slice(-4).map((line, i) => (
-          <div key={`${game.log.length}-${i}`}>{line}</div>
+        {visibleLog.map((e, i) => (
+          <div key={`${game.events.length}-${i}`}>{describeEvent(e)}</div>
         ))}
       </div>
 
@@ -249,6 +288,7 @@ export default function App() {
               className="pass-button"
               onClick={() => {
                 setUi({ step: 'idle' })
+                setMulliganSel([])
                 setGame(newGame())
               }}
             >

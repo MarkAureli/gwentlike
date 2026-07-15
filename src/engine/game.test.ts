@@ -1,30 +1,68 @@
 import { describe, expect, it } from 'vitest'
 import { chooseMove } from './ai'
 import { STARTER_DECK } from './cards'
-import { createGame, HAND_LIMIT, pass, playCard, playerTotal } from './game'
-import type { GameState, PlayerIndex } from './types'
+import {
+  applyMove,
+  createGame,
+  HAND_LIMIT,
+  MULLIGANS_PER_ROUND,
+  neighborsOf,
+  playerTotal,
+} from './game'
+import type { CardInstance, GameState, PlayerIndex, RowKind, Target } from './types'
 
-/** Build a game with known hands: shuffle is bypassed by using uniform decks. */
+let testIid = 1000
+function instances(defIds: string[]): CardInstance[] {
+  return defIds.map((defId) => ({ iid: testIid++, defId }))
+}
+
+/** Game in the play phase with known hands (mulligans already skipped). */
 function gameWith(hand0: string[], hand1: string[], first: PlayerIndex = 0): GameState {
   const state = createGame(STARTER_DECK, STARTER_DECK, 42)
-  state.players[0].hand = hand0.slice()
-  state.players[1].hand = hand1.slice()
+  state.players[0].hand = instances(hand0)
+  state.players[1].hand = instances(hand1)
+  state.players[0].mulliganDone = true
+  state.players[1].mulliganDone = true
+  state.phase = 'play'
   state.current = first
   state.leader = first
   return state
 }
 
+/** Play the card at a hand index (helper mirroring the old API). */
+function play(g: GameState, player: PlayerIndex, handIndex: number, row: RowKind, target?: Target): GameState {
+  return applyMove(g, { kind: 'play', player, iid: g.players[player].hand[handIndex].iid, row, target })
+}
+
+function pass(g: GameState, player: PlayerIndex): GameState {
+  return applyMove(g, { kind: 'pass', player })
+}
+
+function skipMulligans(g: GameState): GameState {
+  while (g.phase === 'mulligan' && g.winner === null) {
+    g = applyMove(g, { kind: 'mulligan', player: g.current, iids: [] })
+  }
+  return g
+}
+
 describe('createGame', () => {
-  it('deals 10 cards to each player from a 25-card deck', () => {
+  it('deals 10 cards each and starts in the mulligan phase', () => {
     const g = createGame(STARTER_DECK, STARTER_DECK, 1)
     for (const p of g.players) {
       expect(p.hand).toHaveLength(10)
       expect(p.deck).toHaveLength(15)
-      expect(p.roundWins).toBe(0)
-      expect(p.passed).toBe(false)
+      expect(p.mulligansLeft).toBe(MULLIGANS_PER_ROUND[0])
+      expect(p.mulliganDone).toBe(false)
     }
+    expect(g.phase).toBe('mulligan')
     expect(g.round).toBe(1)
     expect(g.winner).toBeNull()
+  })
+
+  it('assigns a unique instance id to every card', () => {
+    const g = createGame(STARTER_DECK, STARTER_DECK, 1)
+    const iids = g.players.flatMap((p) => [...p.deck, ...p.hand].map((c) => c.iid))
+    expect(new Set(iids).size).toBe(50)
   })
 
   it('is deterministic for a given seed', () => {
@@ -35,105 +73,183 @@ describe('createGame', () => {
   })
 })
 
-describe('playCard', () => {
+describe('mulligan', () => {
+  it('swaps selected cards for fresh draws and returns them to the deck', () => {
+    const g0 = createGame(STARTER_DECK, STARTER_DECK, 3)
+    const me = g0.current
+    const swapped = g0.players[me].hand.slice(0, 2)
+    const g = applyMove(g0, { kind: 'mulligan', player: me, iids: swapped.map((c) => c.iid) })
+    const p = g.players[me]
+    expect(p.hand).toHaveLength(10)
+    expect(p.deck).toHaveLength(15)
+    for (const card of swapped) {
+      expect(p.hand.some((c) => c.iid === card.iid)).toBe(false)
+      expect(p.deck.some((c) => c.iid === card.iid)).toBe(true)
+    }
+    expect(p.mulliganDone).toBe(true)
+    expect(g.events.at(-1)).toEqual({ type: 'mulliganed', player: me, count: 2 })
+  })
+
+  it('enforces the allowance and rejects duplicates', () => {
+    const g = createGame(STARTER_DECK, STARTER_DECK, 3)
+    const me = g.current
+    const iids = g.players[me].hand.slice(0, 4).map((c) => c.iid)
+    expect(() => applyMove(g, { kind: 'mulligan', player: me, iids })).toThrow('too many')
+    expect(() =>
+      applyMove(g, { kind: 'mulligan', player: me, iids: [iids[0], iids[0]] }),
+    ).toThrow('duplicate')
+  })
+
+  it('moves to the play phase once both players are done, leader first', () => {
+    let g = createGame(STARTER_DECK, STARTER_DECK, 3)
+    const leader = g.leader
+    g = applyMove(g, { kind: 'mulligan', player: g.current, iids: [] })
+    expect(g.phase).toBe('mulligan')
+    expect(g.current).toBe(leader === 0 ? 1 : 0)
+    g = applyMove(g, { kind: 'mulligan', player: g.current, iids: [] })
+    expect(g.phase).toBe('play')
+    expect(g.current).toBe(leader)
+  })
+
+  it('rejects plays and passes during the mulligan phase', () => {
+    const g = createGame(STARTER_DECK, STARTER_DECK, 3)
+    const me = g.current
+    const iid = g.players[me].hand[0].iid
+    expect(() => applyMove(g, { kind: 'play', player: me, iid, row: 'melee' })).toThrow('not in the play phase')
+    expect(() => applyMove(g, { kind: 'pass', player: me })).toThrow('not in the play phase')
+  })
+
+  it('rejects mulligans during the play phase', () => {
+    const g = gameWith(['militia'], ['militia'])
+    expect(() => applyMove(g, { kind: 'mulligan', player: 0, iids: [] })).toThrow('not in the mulligan phase')
+  })
+})
+
+describe('playing cards', () => {
   it('places a unit and alternates turns', () => {
     let g = gameWith(['militia', 'pikeman'], ['shieldbearer'])
-    g = playCard(g, 0, 0, 'melee')
+    g = play(g, 0, 0, 'melee')
     expect(g.players[0].rows.melee).toHaveLength(1)
     expect(g.players[0].rows.melee[0].power).toBe(4)
-    expect(g.players[0].hand).toEqual(['pikeman'])
+    expect(g.players[0].hand.map((c) => c.defId)).toEqual(['pikeman'])
     expect(g.current).toBe(1)
+  })
+
+  it('keeps a card’s instance id from hand to board', () => {
+    let g = gameWith(['militia'], ['militia'])
+    const iid = g.players[0].hand[0].iid
+    g = play(g, 0, 0, 'melee')
+    expect(g.players[0].rows.melee[0].iid).toBe(iid)
+  })
+
+  it('inserts at an explicit position within the row', () => {
+    // The spare champion keeps the hand non-empty so the round doesn't end.
+    let g = gameWith(['militia', 'pikeman', 'shieldbearer', 'champion'], ['militia'], 0)
+    g = play(g, 0, 0, 'melee')
+    g = pass(g, 1)
+    g = play(g, 0, 0, 'melee') // append: [militia, pikeman]
+    g = applyMove(g, {
+      kind: 'play',
+      player: 0,
+      iid: g.players[0].hand[0].iid,
+      row: 'melee',
+      position: 1, // insert between the two
+    })
+    expect(g.players[0].rows.melee.map((u) => u.defId)).toEqual(['militia', 'shieldbearer', 'pikeman'])
+  })
+
+  it('rejects an out-of-bounds position', () => {
+    const g = gameWith(['militia'], ['militia'])
+    const iid = g.players[0].hand[0].iid
+    expect(() => applyMove(g, { kind: 'play', player: 0, iid, row: 'melee', position: 5 })).toThrow(
+      'invalid row position',
+    )
   })
 
   it('rejects out-of-turn and post-pass plays', () => {
     const g = gameWith(['militia'], ['militia'])
-    expect(() => playCard(g, 1, 0, 'melee')).toThrow('not your turn')
+    expect(() => play(g, 1, 0, 'melee')).toThrow('not your turn')
     const passed = pass(g, 0)
-    expect(() => playCard(passed, 0, 0, 'melee')).toThrow()
+    expect(() => play(passed, 0, 0, 'melee')).toThrow()
   })
 
   it('damage deploy hurts and can destroy enemy units', () => {
     let g = gameWith(['militia', 'militia'], ['assassin', 'scout'])
-    g = playCard(g, 0, 0, 'melee') // 4-power militia
-    const militiaUid = g.players[0].rows.melee[0].uid
+    g = play(g, 0, 0, 'melee') // 4-power militia
+    const militiaIid = g.players[0].rows.melee[0].iid
     // Assassin deals 5: kills the 4-power militia.
-    g = playCard(g, 1, 0, 'ranged', { player: 0, row: 'melee', uid: militiaUid })
+    g = play(g, 1, 0, 'ranged', { player: 0, row: 'melee', iid: militiaIid })
     expect(g.players[0].rows.melee).toHaveLength(0)
-    expect(g.players[0].graveyard).toContain('militia')
+    expect(g.players[0].graveyard.some((c) => c.iid === militiaIid)).toBe(true)
+    expect(g.events.some((e) => e.type === 'destroyed' && e.iid === militiaIid)).toBe(true)
   })
 
   it('boost deploy raises an allied unit', () => {
     let g = gameWith(['militia', 'medic'], ['militia', 'militia'])
-    g = playCard(g, 0, 0, 'melee')
-    g = playCard(g, 1, 0, 'melee')
-    const allyUid = g.players[0].rows.melee[0].uid
-    g = playCard(g, 0, 0, 'ranged', { player: 0, row: 'melee', uid: allyUid })
+    g = play(g, 0, 0, 'melee')
+    g = play(g, 1, 0, 'melee')
+    const allyIid = g.players[0].rows.melee[0].iid
+    g = play(g, 0, 0, 'ranged', { player: 0, row: 'melee', iid: allyIid })
     expect(g.players[0].rows.melee[0].power).toBe(7)
   })
 
   it('rowBoost boosts other allies in the row it lands in', () => {
     let g = gameWith(['militia', 'drummer'], ['militia', 'militia'])
-    g = playCard(g, 0, 0, 'melee')
-    g = playCard(g, 1, 0, 'melee')
-    g = playCard(g, 0, 0, 'melee') // drummer into same row
+    g = play(g, 0, 0, 'melee')
+    g = play(g, 1, 0, 'melee')
+    g = play(g, 0, 0, 'melee') // drummer into same row
     const row = g.players[0].rows.melee
     expect(row.find((u) => u.defId === 'militia')!.power).toBe(5)
     expect(row.find((u) => u.defId === 'drummer')!.power).toBe(2)
   })
 
-  it('draw deploy draws a card', () => {
+  it('draw deploy draws a card and emits a drew event', () => {
     let g = gameWith(['scholar', 'militia'], ['militia'])
     const deckBefore = g.players[0].deck.length
-    g = playCard(g, 0, 0, 'ranged')
+    const expected = g.players[0].deck[0]
+    g = play(g, 0, 0, 'ranged')
     expect(g.players[0].deck).toHaveLength(deckBefore - 1)
     expect(g.players[0].hand).toHaveLength(2) // militia + drawn card
+    expect(g.events.at(-1)).toEqual({ type: 'drew', player: 0, iid: expected.iid, defId: expected.defId })
   })
 
   it('scholar draws even from a full 10-card opening hand', () => {
     const g0 = createGame(STARTER_DECK, STARTER_DECK, 5)
-    g0.players[0].hand = ['scholar', ...Array(9).fill('militia')]
+    g0.players[0].hand = instances(['scholar', ...Array(9).fill('militia')])
+    g0.players[0].mulliganDone = true
+    g0.players[1].mulliganDone = true
+    g0.phase = 'play'
     g0.current = 0
     g0.leader = 0
     const expectedDraw = g0.players[0].deck[0]
-    const g = playCard(g0, 0, 0, 'ranged')
+    const g = play(g0, 0, 0, 'ranged')
     // Played one, drew one: hand stays at 10, deck shrinks, drawn card is last.
     expect(g.players[0].hand).toHaveLength(10)
     expect(g.players[0].deck).toHaveLength(14)
-    expect(g.players[0].hand[9]).toBe(expectedDraw)
+    expect(g.players[0].hand[9].iid).toBe(expectedDraw.iid)
   })
+})
 
-  it('every scholar play in AI self-play draws exactly one card', () => {
-    let scholarPlays = 0
-    for (let seed = 1; seed <= 20; seed++) {
-      let g = createGame(STARTER_DECK, STARTER_DECK, seed)
-      for (let i = 0; i < 300 && g.winner === null; i++) {
-        const me = g.current
-        const move = chooseMove(g, me)
-        if (move.kind === 'pass') {
-          g = pass(g, me)
-          continue
-        }
-        const isScholar = g.players[me].hand[move.handIndex] === 'scholar'
-        const handBefore = g.players[me].hand.length
-        const deckBefore = g.players[me].deck.length
-        const roundBefore = g.round
-        g = playCard(g, me, move.handIndex, move.row, move.target)
-        if (isScholar && g.round === roundBefore) {
-          scholarPlays++
-          expect(g.players[me].deck).toHaveLength(deckBefore - 1)
-          expect(g.players[me].hand).toHaveLength(handBefore) // -1 played, +1 drawn
-        }
-      }
-    }
-    expect(scholarPlays).toBeGreaterThan(0)
+describe('row positioning helpers', () => {
+  it('neighborsOf returns adjacent units only', () => {
+    // The spare champion keeps the hand non-empty so the round doesn't end.
+    let g = gameWith(['militia', 'pikeman', 'shieldbearer', 'champion'], ['militia'], 0)
+    g = play(g, 0, 0, 'melee')
+    g = pass(g, 1)
+    g = play(g, 0, 0, 'melee')
+    g = play(g, 0, 0, 'melee')
+    const row = g.players[0].rows.melee // [militia, pikeman, shieldbearer]
+    expect(neighborsOf(row, row[0].iid).map((u) => u.defId)).toEqual(['pikeman'])
+    expect(neighborsOf(row, row[1].iid).map((u) => u.defId)).toEqual(['militia', 'shieldbearer'])
+    expect(neighborsOf(row, -1)).toEqual([])
   })
 })
 
 describe('rounds and game end', () => {
-  it('resolves a round when both players pass and starts the next', () => {
+  it('resolves a round when both players pass and starts the next with a mulligan', () => {
     let g = gameWith(['pikeman', 'militia'], ['militia', 'militia'])
-    g = playCard(g, 0, 0, 'melee') // P1: 6
-    g = playCard(g, 1, 0, 'melee') // P2: 4
+    g = play(g, 0, 0, 'melee') // P1: 6
+    g = play(g, 1, 0, 'melee') // P2: 4
     g = pass(g, 0)
     g = pass(g, 1)
     expect(g.round).toBe(2)
@@ -141,16 +257,18 @@ describe('rounds and game end', () => {
     expect(g.players[1].roundWins).toBe(0)
     // Board cleared into graveyards, passes reset, 3 cards drawn.
     expect(g.players[0].rows.melee).toHaveLength(0)
-    expect(g.players[0].graveyard).toContain('pikeman')
+    expect(g.players[0].graveyard.some((c) => c.defId === 'pikeman')).toBe(true)
     expect(g.players[0].passed).toBe(false)
-    // Round winner leads the next round.
+    // Round winner leads the next round, which starts with a 1-card mulligan.
+    expect(g.phase).toBe('mulligan')
     expect(g.current).toBe(0)
+    expect(g.players[0].mulligansLeft).toBe(MULLIGANS_PER_ROUND[1])
   })
 
   it('a drawn round gives both players a round win', () => {
     let g = gameWith(['militia', 'militia'], ['militia', 'militia'])
-    g = playCard(g, 0, 0, 'melee')
-    g = playCard(g, 1, 0, 'ranged')
+    g = play(g, 0, 0, 'melee')
+    g = play(g, 1, 0, 'ranged')
     g = pass(g, 0)
     g = pass(g, 1)
     expect(g.players[0].roundWins).toBe(1)
@@ -160,25 +278,26 @@ describe('rounds and game end', () => {
   it('first to two round wins takes the game', () => {
     let g = gameWith(['pikeman', 'pikeman', 'militia'], ['militia', 'militia', 'militia'])
     // Round 1: P1 wins 6-4.
-    g = playCard(g, 0, 0, 'melee')
-    g = playCard(g, 1, 0, 'melee')
+    g = play(g, 0, 0, 'melee')
+    g = play(g, 1, 0, 'melee')
     g = pass(g, 0)
     g = pass(g, 1)
-    // Round 2: P1 wins again.
-    g = playCard(g, 0, 0, 'melee')
-    g = playCard(g, 1, 0, 'melee')
+    // Round 2: mulligans, then P1 wins again.
+    g = skipMulligans(g)
+    g = play(g, 0, 0, 'melee')
+    g = play(g, 1, 0, 'melee')
     g = pass(g, 0)
     g = pass(g, 1)
     expect(g.winner).toBe(0)
-    expect(() => playCard(g, 0, 0, 'melee')).toThrow('game is over')
+    expect(() => play(g, 0, 0, 'melee')).toThrow('game is over')
   })
 
   it('a passed opponent lets the other player act repeatedly', () => {
     let g = gameWith(['militia', 'militia', 'militia'], ['militia'])
-    g = playCard(g, 0, 0, 'melee')
+    g = play(g, 0, 0, 'melee')
     g = pass(g, 1)
     expect(g.current).toBe(0)
-    g = playCard(g, 0, 0, 'melee')
+    g = play(g, 0, 0, 'melee')
     expect(g.current).toBe(0)
   })
 
@@ -188,7 +307,7 @@ describe('rounds and game end', () => {
       ['militia'],
     )
     // P1 plays one card (9 left), P2 passes, P1 wins the round, draws 3 → capped at 10.
-    g = playCard(g, 0, 9, 'melee') // play the pikeman: P1 leads 6-0
+    g = play(g, 0, 9, 'melee') // play the pikeman: P1 leads 6-0
     g = pass(g, 1)
     g = pass(g, 0)
     expect(g.round).toBe(2)
@@ -199,32 +318,69 @@ describe('rounds and game end', () => {
 describe('AI', () => {
   it('passes when opponent passed and it is ahead', () => {
     let g = gameWith(['pikeman', 'militia'], ['militia', 'militia'], 1)
-    g = playCard(g, 1, 0, 'melee') // AI-side setup: P2 plays 4
-    g = playCard(g, 0, 0, 'melee') // P1 plays 6
+    g = play(g, 1, 0, 'melee') // P2 plays 4
+    g = play(g, 0, 0, 'melee') // P1 plays 6
     g = pass(g, 1)
     // Now P1 (me=0) is ahead 6-4 with opponent passed.
     expect(playerTotal(g.players[0])).toBeGreaterThan(playerTotal(g.players[1]))
-    expect(chooseMove(g, 0)).toEqual({ kind: 'pass' })
+    expect(chooseMove(g, 0)).toEqual({ kind: 'pass', player: 0 })
   })
 
   it('concedes an unwinnable round to save cards', () => {
     let g = gameWith(['champion', 'champion', 'militia'], ['militia', 'militia', 'militia'], 0)
-    g = playCard(g, 0, 0, 'melee') // P1: 10
-    g = playCard(g, 1, 0, 'melee') // P2: 4
-    g = playCard(g, 0, 0, 'melee') // P1: 20
-    g = playCard(g, 1, 0, 'melee') // P2: 8
+    g = play(g, 0, 0, 'melee') // P1: 10
+    g = play(g, 1, 0, 'melee') // P2: 4
+    g = play(g, 0, 0, 'melee') // P1: 20
+    g = play(g, 1, 0, 'melee') // P2: 8
     g = pass(g, 0)
     // P2 is at 8 vs 20 with one militia (4) left: 12 < 20, so concede.
-    expect(chooseMove(g, 1)).toEqual({ kind: 'pass' })
+    expect(chooseMove(g, 1)).toEqual({ kind: 'pass', player: 1 })
   })
 
-  it('produces a legal move that the engine accepts', () => {
-    let g = createGame(STARTER_DECK, STARTER_DECK, 99)
-    for (let i = 0; i < 200 && g.winner === null; i++) {
-      const me = g.current
-      const move = chooseMove(g, me)
-      g = move.kind === 'pass' ? pass(g, me) : playCard(g, me, move.handIndex, move.row, move.target)
+  it('mulligans only weak cards within the allowance', () => {
+    const g = createGame(STARTER_DECK, STARTER_DECK, 3)
+    const me = g.current
+    const move = chooseMove(g, me)
+    if (move.kind !== 'mulligan') throw new Error('expected a mulligan move')
+    expect(move.iids.length).toBeLessThanOrEqual(g.players[me].mulligansLeft)
+    for (const iid of move.iids) {
+      expect(g.players[me].hand.some((c) => c.iid === iid)).toBe(true)
     }
-    expect(g.winner).not.toBeNull()
+  })
+
+  it('plays full games to completion via chooseMove/applyMove', () => {
+    for (const seed of [11, 99, 2024]) {
+      let g = createGame(STARTER_DECK, STARTER_DECK, seed)
+      for (let i = 0; i < 300 && g.winner === null; i++) {
+        g = applyMove(g, chooseMove(g, g.current))
+      }
+      expect(g.winner).not.toBeNull()
+    }
+  })
+
+  it('every scholar play in AI self-play draws exactly one card', () => {
+    let scholarPlays = 0
+    for (let seed = 1; seed <= 20; seed++) {
+      let g = createGame(STARTER_DECK, STARTER_DECK, seed)
+      for (let i = 0; i < 300 && g.winner === null; i++) {
+        const me = g.current
+        const move = chooseMove(g, me)
+        if (move.kind === 'play') {
+          const isScholar = g.players[me].hand.find((c) => c.iid === move.iid)?.defId === 'scholar'
+          const handBefore = g.players[me].hand.length
+          const deckBefore = g.players[me].deck.length
+          const roundBefore = g.round
+          g = applyMove(g, move)
+          if (isScholar && g.round === roundBefore) {
+            scholarPlays++
+            expect(g.players[me].deck).toHaveLength(deckBefore - 1)
+            expect(g.players[me].hand).toHaveLength(handBefore) // -1 played, +1 drawn
+          }
+        } else {
+          g = applyMove(g, move)
+        }
+      }
+    }
+    expect(scholarPlays).toBeGreaterThan(0)
   })
 })

@@ -1,19 +1,17 @@
 import { CARD_DEFS } from './cards'
 import { opponentOf, playerTotal } from './game'
-import type { GameState, PlayerIndex, RowKind, Target, Unit } from './types'
+import type { CardInstance, GameState, Move, PlayerIndex, RowKind, Target, Unit } from './types'
 import { ROWS } from './types'
 
-export type Move =
-  | { kind: 'pass' }
-  | { kind: 'play'; handIndex: number; row: RowKind; target?: Target }
+const KILL_BONUS = 2
+const DRAW_VALUE = 4
+/** Cards valued below this are mulliganed away. */
+const MULLIGAN_THRESHOLD = 6
 
 interface ScoredMove {
   move: Move
   score: number
 }
-
-const KILL_BONUS = 2
-const DRAW_VALUE = 4
 
 function allUnits(state: GameState, player: PlayerIndex): { unit: Unit; row: RowKind }[] {
   return ROWS.flatMap((row) => state.players[player].rows[row].map((unit) => ({ unit, row })))
@@ -25,9 +23,25 @@ function placementRow(state: GameState, me: PlayerIndex): RowKind {
   return rows.melee.length <= rows.ranged.length ? 'melee' : 'ranged'
 }
 
-function scoreCard(state: GameState, me: PlayerIndex, handIndex: number): ScoredMove {
-  const defId = state.players[me].hand[handIndex]
-  const def = CARD_DEFS[defId]
+/** Rough standalone value of holding this card. */
+function cardValue(card: CardInstance): number {
+  const def = CARD_DEFS[card.defId]
+  return def.power + (def.deploy ? 3 : 0)
+}
+
+function chooseMulligan(state: GameState, me: PlayerIndex): Move {
+  const p = state.players[me]
+  const limit = Math.min(p.mulligansLeft, p.deck.length)
+  const iids = p.hand
+    .filter((c) => cardValue(c) < MULLIGAN_THRESHOLD)
+    .sort((a, b) => cardValue(a) - cardValue(b))
+    .slice(0, limit)
+    .map((c) => c.iid)
+  return { kind: 'mulligan', player: me, iids }
+}
+
+function scoreCard(state: GameState, me: PlayerIndex, card: CardInstance): ScoredMove {
+  const def = CARD_DEFS[card.defId]
   const deploy = def.deploy
   const enemy = opponentOf(me)
   let row = placementRow(state, me)
@@ -42,7 +56,7 @@ function scoreCard(state: GameState, me: PlayerIndex, handIndex: number): Scored
           const value = Math.min(deploy.amount, unit.power) + (unit.power <= deploy.amount ? KILL_BONUS : 0)
           if (value > best) {
             best = value
-            target = { player: enemy, row: r, uid: unit.uid }
+            target = { player: enemy, row: r, iid: unit.iid }
           }
         }
         effectValue = best
@@ -52,7 +66,7 @@ function scoreCard(state: GameState, me: PlayerIndex, handIndex: number): Scored
         const candidates = allUnits(state, me)
         if (candidates.length > 0) {
           const pick = candidates[0]
-          target = { player: me, row: pick.row, uid: pick.unit.uid }
+          target = { player: me, row: pick.row, iid: pick.unit.iid }
           effectValue = deploy.amount
         }
         break
@@ -87,40 +101,42 @@ function scoreCard(state: GameState, me: PlayerIndex, handIndex: number): Scored
     }
   }
 
-  return { move: { kind: 'play', handIndex, row, target }, score: def.power + effectValue }
+  return { move: { kind: 'play', player: me, iid: card.iid, row, target }, score: def.power + effectValue }
 }
 
 /** Optimistic estimate of how many points the rest of the hand could add. */
 function handPotential(state: GameState, me: PlayerIndex): number {
-  return state.players[me].hand.reduce((sum, id) => {
-    const def = CARD_DEFS[id]
+  return state.players[me].hand.reduce((sum, card) => {
+    const def = CARD_DEFS[card.defId]
     const effect = def.deploy && def.deploy.type !== 'draw' && 'amount' in def.deploy ? def.deploy.amount : 0
     return sum + def.power + effect
   }, 0)
 }
 
 export function chooseMove(state: GameState, me: PlayerIndex): Move {
+  if (state.phase === 'mulligan') return chooseMulligan(state, me)
+
   const enemy = opponentOf(me)
   const myTotal = playerTotal(state.players[me])
   const enemyTotal = playerTotal(state.players[enemy])
   const enemyPassed = state.players[enemy].passed
   const hand = state.players[me].hand
 
-  if (hand.length === 0) return { kind: 'pass' }
+  if (hand.length === 0) return { kind: 'pass', player: me }
 
   if (enemyPassed) {
     // Already winning: lock in the round without spending more cards.
-    if (myTotal > enemyTotal) return { kind: 'pass' }
+    if (myTotal > enemyTotal) return { kind: 'pass', player: me }
     // Can't catch up even by playing everything: concede the round, save cards.
-    if (myTotal + handPotential(state, me) <= enemyTotal) return { kind: 'pass' }
+    if (myTotal + handPotential(state, me) <= enemyTotal) return { kind: 'pass', player: me }
   } else if (state.round === 1 && myTotal - enemyTotal > 20) {
     // Bank a huge lead in round 1 rather than overcommitting.
-    return { kind: 'pass' }
+    return { kind: 'pass', player: me }
   }
 
   let best: ScoredMove | null = null
-  for (let i = 0; i < hand.length; i++) {
-    const scored = scoreCard(state, me, i)
+  for (const card of hand) {
+    const scored = scoreCard(state, me, card)
     if (!best || scored.score > best.score) best = scored
   }
   return best!.move

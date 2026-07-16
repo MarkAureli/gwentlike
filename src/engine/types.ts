@@ -11,10 +11,14 @@ export type DeployEffect =
   | { type: 'rowBoost'; amount: number } // boost every other ally in the row this unit is played to
   | { type: 'draw' } // draw a card
 
+export type CardType = 'unit' | 'spell' | 'artifact'
+
 export interface CardDef {
   id: string
   name: string
-  power: number
+  type: CardType
+  /** units only — spells and artifacts have no power */
+  power?: number
   provisions: number
   deploy?: DeployEffect
 }
@@ -28,7 +32,9 @@ export interface CardInstance {
   defId: string
 }
 
+/** Anything occupying a row slot: a unit or an artifact (power 0). */
 export interface Unit extends CardInstance {
+  type: CardType
   basePower: number
   power: number
 }
@@ -61,7 +67,7 @@ export interface Target {
  * rows are ordered and adjacency will matter for future mechanics.
  */
 export type Move =
-  | { kind: 'play'; player: PlayerIndex; iid: number; row: RowKind; position?: number; target?: Target }
+  | { kind: 'play'; player: PlayerIndex; iid: number; row?: RowKind; position?: number; target?: Target }
   | { kind: 'pass'; player: PlayerIndex }
   | { kind: 'mulligan'; player: PlayerIndex; iid: number } // swap one card
   | { kind: 'endMulligan'; player: PlayerIndex } // keep the rest of the hand
@@ -75,7 +81,7 @@ export type GameEvent =
   | { type: 'roundStarted'; round: number; leader: PlayerIndex }
   | { type: 'mulliganed'; player: PlayerIndex; iid: number; defId: string }
   | { type: 'mulliganEnded'; player: PlayerIndex; swapped: number }
-  | { type: 'played'; player: PlayerIndex; iid: number; defId: string; row: RowKind; position: number }
+  | { type: 'played'; player: PlayerIndex; iid: number; defId: string; row?: RowKind; position?: number }
   | { type: 'drew'; player: PlayerIndex; iid: number; defId: string }
   | { type: 'drawFailed'; player: PlayerIndex; sourceDefId: string }
   | { type: 'damaged'; player: PlayerIndex; iid: number; defId: string; amount: number; power: number; sourceDefId: string }

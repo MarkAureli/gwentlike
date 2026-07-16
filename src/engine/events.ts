@@ -22,7 +22,9 @@ export function describeEvent(e: GameEvent): string {
         ? `Player ${e.player + 1} keeps their hand.`
         : `Player ${e.player + 1} ends their mulligan (${e.swapped} swapped).`
     case 'played':
-      return `Player ${e.player + 1} plays ${name(e.defId)} to the ${e.row} row.`
+      return CARD_DEFS[e.defId].type === 'spell'
+        ? `Player ${e.player + 1} casts ${name(e.defId)}.`
+        : `Player ${e.player + 1} plays ${name(e.defId)} to the ${e.row} row.`
     case 'drew':
       return `Player ${e.player + 1} draws a card.`
     case 'drawFailed':

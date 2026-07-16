@@ -259,6 +259,78 @@ describe('playing cards', () => {
   })
 })
 
+describe('spells', () => {
+  it('resolve their effect and go straight to the graveyard', () => {
+    let g = gameWith(['militia', 'militia'], ['fireball', 'militia'])
+    g = play(g, 0, 0, 'melee') // 4-power militia
+    const targetIid = g.players[0].rows.melee[0].iid
+    const fireballIid = g.players[1].hand[0].iid
+    // Fireball needs no row.
+    g = applyMove(g, { kind: 'play', player: 1, iid: fireballIid, target: { player: 0, row: 'melee', iid: targetIid } })
+    // Fireball (4 damage) kills the militia and is never on the board.
+    expect(g.players[0].rows.melee).toHaveLength(0)
+    expect(g.players[1].rows.melee).toHaveLength(0)
+    expect(g.players[1].rows.ranged).toHaveLength(0)
+    expect(g.players[1].graveyard.some((c) => c.iid === fireballIid)).toBe(true)
+    expect(g.players[1].hand.map((c) => c.defId)).toEqual(['militia'])
+  })
+
+  it('contribute nothing to the row totals', () => {
+    let g = gameWith(['militia', 'blessing'], ['militia', 'militia'])
+    g = play(g, 0, 0, 'melee')
+    g = play(g, 1, 0, 'melee')
+    const allyIid = g.players[0].rows.melee[0].iid
+    g = applyMove(g, {
+      kind: 'play',
+      player: 0,
+      iid: g.players[0].hand[0].iid,
+      target: { player: 0, row: 'melee', iid: allyIid },
+    })
+    expect(playerTotal(g.players[0])).toBe(8) // 4 militia + 4 blessing boost
+  })
+})
+
+describe('artifacts', () => {
+  it('occupy a row with zero power and stay after their deploy resolves', () => {
+    let g = gameWith(['militia', 'watchtower', 'militia'], ['militia', 'militia'])
+    g = play(g, 0, 0, 'melee')
+    g = play(g, 1, 0, 'melee')
+    const enemyIid = g.players[1].rows.melee[0].iid
+    g = play(g, 0, 0, 'ranged', { player: 1, row: 'melee', iid: enemyIid })
+    // Watchtower dealt 2 damage and sits on the board contributing nothing.
+    expect(g.players[1].rows.melee[0].power).toBe(2)
+    expect(g.players[0].rows.ranged).toHaveLength(1)
+    expect(g.players[0].rows.ranged[0].type).toBe('artifact')
+    expect(playerTotal(g.players[0])).toBe(4) // militia only
+  })
+
+  it('cannot be damaged directly and are immune to row damage', () => {
+    let g = gameWith(['watchtower', 'militia', 'militia'], ['assassin', 'saboteur', 'militia'])
+    g = play(g, 0, 0, 'melee') // watchtower (no enemy units yet: deploy fizzles)
+    const towerIid = g.players[0].rows.melee[0].iid
+    // Direct damage at the artifact is rejected.
+    expect(() =>
+      play(g, 1, 0, 'ranged', { player: 0, row: 'melee', iid: towerIid }),
+    ).toThrow('only units can be damaged')
+    // Row damage sweeps past it.
+    g = play(g, 1, 1, 'ranged', { player: 0, row: 'melee' }) // saboteur rowDamage 1
+    expect(g.players[0].rows.melee).toHaveLength(1)
+    expect(g.players[0].rows.melee[0].iid).toBe(towerIid)
+  })
+
+  it('go to the graveyard when the round ends', () => {
+    let g = gameWith(['watchtower', 'militia'], ['militia', 'militia'])
+    g = play(g, 0, 0, 'melee')
+    g = play(g, 1, 0, 'melee')
+    const towerIid = g.players[0].rows.melee[0].iid
+    g = pass(g, 0)
+    g = pass(g, 1)
+    expect(g.round).toBe(2)
+    expect(g.players[0].rows.melee).toHaveLength(0)
+    expect(g.players[0].graveyard.some((c) => c.iid === towerIid)).toBe(true)
+  })
+})
+
 describe('row positioning helpers', () => {
   it('neighborsOf returns adjacent units only', () => {
     // The spare champion keeps the hand non-empty so the round doesn't end.

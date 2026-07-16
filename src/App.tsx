@@ -13,10 +13,13 @@ const DRAW_FLASH_MS = 2000
 
 type TargetKind = 'enemyUnit' | 'allyUnit' | 'enemyRow'
 
+type Placement = { row: RowKind; position: number }
+
 type UiState =
   | { step: 'idle' }
   | { step: 'chooseRow'; iid: number }
-  | { step: 'chooseTarget'; iid: number; row: RowKind; position: number; targetKind: TargetKind }
+  // placement is absent for spells — they never land on a row
+  | { step: 'chooseTarget'; iid: number; placement?: Placement; targetKind: TargetKind }
 
 function newGame(): GameState {
   return createGame(STARTER_DECK, STARTER_DECK, Math.floor(Math.random() * 2 ** 31))
@@ -37,18 +40,22 @@ function targetKindFor(state: GameState, defId: string): TargetKind | null {
   }
 }
 
+function typeGlyph(type: 'spell' | 'artifact'): string {
+  return type === 'spell' ? '✦' : '◈'
+}
+
 function UnitBadge(props: { unit: Unit; targetable: boolean; onClick?: () => void }) {
   const { unit, targetable, onClick } = props
   const def = CARD_DEFS[unit.defId]
   const powerClass = unit.power > unit.basePower ? 'boosted' : unit.power < unit.basePower ? 'damaged' : ''
   return (
     <button
-      className={`unit ${targetable ? 'targetable' : ''}`}
+      className={`unit ${targetable ? 'targetable' : ''} ${unit.type === 'artifact' ? 'artifact' : ''}`}
       onClick={onClick}
       disabled={!targetable}
       title={abilityText(def.deploy)}
     >
-      <span className={`unit-power ${powerClass}`}>{unit.power}</span>
+      <span className={`unit-power ${powerClass}`}>{unit.type === 'artifact' ? typeGlyph('artifact') : unit.power}</span>
       <span className="unit-name">{def.name}</span>
     </button>
   )
@@ -57,6 +64,7 @@ function UnitBadge(props: { unit: Unit; targetable: boolean; onClick?: () => voi
 export default function App() {
   const [game, setGame] = useState(newGame)
   const [ui, setUi] = useState<UiState>({ step: 'idle' })
+  const [inspect, setInspect] = useState<null | 'deck' | 'graveyard'>(null)
   const [drawnFlash, setDrawnFlash] = useState<number[]>([])
   const seenEvents = useRef(game.events.length)
 
@@ -89,8 +97,10 @@ export default function App() {
   const inMulligan = game.phase === 'mulligan'
   const humanCanAct = game.winner === null && game.current === HUMAN && (inMulligan || !me.passed)
 
-  function commitPlay(iid: number, row: RowKind, position: number, target?: Target) {
-    setGame((g) => applyMove(g, { kind: 'play', player: HUMAN, iid, row, position, target }))
+  function commitPlay(iid: number, placement?: Placement, target?: Target) {
+    setGame((g) =>
+      applyMove(g, { kind: 'play', player: HUMAN, iid, row: placement?.row, position: placement?.position, target }),
+    )
     setUi({ step: 'idle' })
   }
 
@@ -101,8 +111,18 @@ export default function App() {
       setGame((g) => applyMove(g, { kind: 'mulligan', player: HUMAN, iid: card.iid }))
       return
     }
-    if (ui.step !== 'idle' && ui.iid === card.iid) setUi({ step: 'idle' })
-    else setUi({ step: 'chooseRow', iid: card.iid })
+    if (ui.step !== 'idle' && ui.iid === card.iid) {
+      setUi({ step: 'idle' })
+      return
+    }
+    if (CARD_DEFS[card.defId].type === 'spell') {
+      // Spells skip row placement: pick a target if one exists, else cast now.
+      const kind = targetKindFor(game, card.defId)
+      if (kind) setUi({ step: 'chooseTarget', iid: card.iid, targetKind: kind })
+      else commitPlay(card.iid)
+      return
+    }
+    setUi({ step: 'chooseRow', iid: card.iid })
   }
 
   function onEndMulligan() {
@@ -115,8 +135,8 @@ export default function App() {
     const card = me.hand.find((c) => c.iid === ui.iid)
     if (!card) return
     const kind = targetKindFor(game, card.defId)
-    if (kind) setUi({ step: 'chooseTarget', iid: ui.iid, row, position, targetKind: kind })
-    else commitPlay(ui.iid, row, position)
+    if (kind) setUi({ step: 'chooseTarget', iid: ui.iid, placement: { row, position }, targetKind: kind })
+    else commitPlay(ui.iid, { row, position })
   }
 
   function onMyRowClick(row: RowKind) {
@@ -126,19 +146,19 @@ export default function App() {
 
   function onEnemyRowClick(row: RowKind) {
     if (ui.step === 'chooseTarget' && ui.targetKind === 'enemyRow') {
-      commitPlay(ui.iid, ui.row, ui.position, { player: AI, row })
+      commitPlay(ui.iid, ui.placement, { player: AI, row })
     }
   }
 
   function onEnemyUnitClick(row: RowKind, iid: number) {
     if (ui.step === 'chooseTarget' && ui.targetKind === 'enemyUnit') {
-      commitPlay(ui.iid, ui.row, ui.position, { player: AI, row, iid })
+      commitPlay(ui.iid, ui.placement, { player: AI, row, iid })
     }
   }
 
   function onMyUnitClick(row: RowKind, iid: number) {
     if (ui.step === 'chooseTarget' && ui.targetKind === 'allyUnit') {
-      commitPlay(ui.iid, ui.row, ui.position, { player: HUMAN, row, iid })
+      commitPlay(ui.iid, ui.placement, { player: HUMAN, row, iid })
     }
   }
 
@@ -200,7 +220,7 @@ export default function App() {
             <span key={u.iid} className="unit-slot">
               <UnitBadge
                 unit={u}
-                targetable={isMine ? allyUnitTargetable : enemyUnitTargetable}
+                targetable={u.type === 'unit' && (isMine ? allyUnitTargetable : enemyUnitTargetable)}
                 onClick={() => (isMine ? onMyUnitClick(row, u.iid) : onEnemyUnitClick(row, u.iid))}
               />
               {placeable && (
@@ -238,7 +258,13 @@ export default function App() {
         <div className="score">
           <span className="player-tag">You</span>
           <span className="crowns">{'●'.repeat(me.roundWins)}{'○'.repeat(2 - Math.min(2, me.roundWins))}</span>
-          <span className="meta">deck {me.deck.length} {me.passed ? '· PASSED' : ''}</span>
+          <button className="meta meta-button" onClick={() => setInspect('deck')}>
+            deck {me.deck.length}
+          </button>
+          <button className="meta meta-button" onClick={() => setInspect('graveyard')}>
+            grave {me.graveyard.length}
+          </button>
+          <span className="meta">{me.passed ? 'PASSED' : ''}</span>
           <span className="total">{playerTotal(me)}</span>
         </div>
       </header>
@@ -270,7 +296,9 @@ export default function App() {
                 onClick={() => onHandClick(card)}
                 disabled={!humanCanAct}
               >
-                <span className="card-power">{def.power}</span>
+                <span className={`card-power ${def.type}`}>
+                  {def.type === 'unit' ? def.power : typeGlyph(def.type)}
+                </span>
                 <span className="card-name">{def.name}</span>
                 <span className="card-ability">{abilityText(def.deploy)}</span>
               </button>
@@ -293,6 +321,50 @@ export default function App() {
           <div key={`${game.events.length}-${i}`}>{describeEvent(e)}</div>
         ))}
       </div>
+
+      {inspect !== null && (
+        <div className="overlay" onClick={() => setInspect(null)}>
+          <div className="overlay-box inspect-box" onClick={(e) => e.stopPropagation()}>
+            <h2>
+              {inspect === 'deck'
+                ? `Your deck (${me.deck.length})`
+                : `Your graveyard (${me.graveyard.length})`}
+            </h2>
+            <p className="inspect-note">
+              {inspect === 'deck'
+                ? 'Sorted by type and name — the draw order stays hidden.'
+                : 'In the order the cards arrived.'}
+            </p>
+            <div className="inspect-list">
+              {(inspect === 'deck'
+                ? [...me.deck].sort((a, b) => {
+                    const da = CARD_DEFS[a.defId]
+                    const db = CARD_DEFS[b.defId]
+                    return da.type.localeCompare(db.type) || da.name.localeCompare(db.name) || a.iid - b.iid
+                  })
+                : me.graveyard
+              ).map((card) => {
+                const def = CARD_DEFS[card.defId]
+                return (
+                  <div key={card.iid} className="inspect-row">
+                    <span className={`card-power ${def.type}`}>
+                      {def.type === 'unit' ? def.power : typeGlyph(def.type)}
+                    </span>
+                    <span className="inspect-name">{def.name}</span>
+                    <span className="inspect-ability">{abilityText(def.deploy)}</span>
+                  </div>
+                )
+              })}
+              {(inspect === 'deck' ? me.deck : me.graveyard).length === 0 && (
+                <div className="inspect-row inspect-empty">empty</div>
+              )}
+            </div>
+            <button className="pass-button" onClick={() => setInspect(null)}>
+              Close
+            </button>
+          </div>
+        </div>
+      )}
 
       {game.winner !== null && (
         <div className="overlay">

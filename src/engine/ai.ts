@@ -13,8 +13,11 @@ interface ScoredMove {
   score: number
 }
 
+/** Damage/boost-targetable units (artifacts are immune). */
 function allUnits(state: GameState, player: PlayerIndex): { unit: Unit; row: RowKind }[] {
-  return ROWS.flatMap((row) => state.players[player].rows[row].map((unit) => ({ unit, row })))
+  return ROWS.flatMap((row) =>
+    state.players[player].rows[row].filter((u) => u.type === 'unit').map((unit) => ({ unit, row })),
+  )
 }
 
 /** Row with fewer of my units, to spread out against rowDamage. */
@@ -26,7 +29,10 @@ function placementRow(state: GameState, me: PlayerIndex): RowKind {
 /** Rough standalone value of holding this card. */
 function cardValue(card: CardInstance): number {
   const def = CARD_DEFS[card.defId]
-  return def.power + (def.deploy ? 3 : 0)
+  if (def.type === 'unit') return def.power! + (def.deploy ? 3 : 0)
+  // Spells and artifacts: judge by their effect size.
+  const amount = def.deploy && 'amount' in def.deploy ? def.deploy.amount : 2
+  return 4 + amount
 }
 
 function chooseMulligan(state: GameState, me: PlayerIndex): Move {
@@ -75,7 +81,7 @@ function scoreCard(state: GameState, me: PlayerIndex, card: CardInstance): Score
       case 'rowDamage': {
         let best = 0
         for (const r of ROWS) {
-          const units = state.players[enemy].rows[r]
+          const units = state.players[enemy].rows[r].filter((u) => u.type === 'unit')
           const value = units.reduce(
             (sum, u) => sum + Math.min(deploy.amount, u.power) + (u.power <= deploy.amount ? KILL_BONUS : 0),
             0,
@@ -89,10 +95,11 @@ function scoreCard(state: GameState, me: PlayerIndex, card: CardInstance): Score
         break
       }
       case 'rowBoost': {
-        // Play into whichever of my rows has the most allies.
+        // Play into whichever of my rows has the most boostable allies.
         const rows = state.players[me].rows
-        row = rows.melee.length >= rows.ranged.length ? 'melee' : 'ranged'
-        effectValue = deploy.amount * rows[row].length
+        const boostable = (r: RowKind) => rows[r].filter((u) => u.type === 'unit').length
+        row = boostable('melee') >= boostable('ranged') ? 'melee' : 'ranged'
+        effectValue = deploy.amount * boostable(row)
         break
       }
       case 'draw': {
@@ -102,7 +109,11 @@ function scoreCard(state: GameState, me: PlayerIndex, card: CardInstance): Score
     }
   }
 
-  return { move: { kind: 'play', player: me, iid: card.iid, row, target }, score: def.power + effectValue }
+  const move: Move =
+    def.type === 'spell'
+      ? { kind: 'play', player: me, iid: card.iid, target }
+      : { kind: 'play', player: me, iid: card.iid, row, target }
+  return { move, score: (def.type === 'unit' ? def.power! : 0) + effectValue }
 }
 
 /** Optimistic estimate of how many points the rest of the hand could add. */
@@ -110,7 +121,7 @@ function handPotential(state: GameState, me: PlayerIndex): number {
   return state.players[me].hand.reduce((sum, card) => {
     const def = CARD_DEFS[card.defId]
     const effect = def.deploy && def.deploy.type !== 'draw' && 'amount' in def.deploy ? def.deploy.amount : 0
-    return sum + def.power + effect
+    return sum + (def.power ?? 0) + effect
   }, 0)
 }
 

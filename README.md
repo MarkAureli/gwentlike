@@ -17,10 +17,13 @@ You play against a simple greedy AI. Each round starts with a mulligan; after th
 
 - Both players draw 10 from a 25-card deck; 3 more at the start of rounds 2 and 3 (hand cap 10).
 - Each round opens with a mulligan: the round leader may swap up to 3 cards, the other player up to 2 — one card at a time, drawing each replacement before choosing the next swap (replacements can themselves be swapped). A card shuffled back cannot be redrawn during that same mulligan phase.
-- On your turn: play one card to your melee or ranged row, or pass. Passing locks you out for the rest of the round.
+- Cards come in three types: **units** (have power and score points), **spells** (no power — their effect resolves and they go straight to the graveyard), and **artifacts** (no power — played to a row like units, but immune to damage/boosts and worth 0 points).
+- On your turn: play one card (units/artifacts to your melee or ranged row; spells need no row), or pass. Passing locks you out for the rest of the round.
 - When both players have passed, the higher total power wins the round; a tie gives both players a round win. First to 2 round wins takes the game.
 - The round winner leads the next round; after a tied round, the player who went second in it leads.
-- Deploy abilities resolve when a unit is played: single-target damage/boost, row damage/boost, and card draw.
+- Deploy abilities resolve when a card is played: single-target damage/boost, row damage/boost, and card draw.
+- Everything destroyed during a round or still on the board when it ends goes to its owner's graveyard.
+- Click your deck or graveyard counters to inspect them; the deck view is sorted by type and name so the actual draw order stays hidden.
 - Cards have provision costs in their definitions for future deckbuilding; both players currently use the same starter deck.
 
 ## Architecture

@@ -100,7 +100,7 @@ export function createGame(deckA: string[], deckB: string[], seed: number): Game
 }
 
 export function rowTotal(row: Unit[]): number {
-  return row.reduce((sum, u) => sum + u.power, 0)
+  return row.reduce((sum, u) => sum + (u.type === 'unit' ? u.power : 0), 0)
 }
 
 export function playerTotal(p: PlayerState): number {
@@ -124,9 +124,9 @@ function findUnit(state: GameState, target: Target): Unit | undefined {
 
 function removeDead(state: GameState, player: PlayerIndex, row: RowKind): void {
   const p = state.players[player]
-  const dead = p.rows[row].filter((u) => u.power <= 0)
+  const dead = p.rows[row].filter((u) => u.type === 'unit' && u.power <= 0)
   if (dead.length === 0) return
-  p.rows[row] = p.rows[row].filter((u) => u.power > 0)
+  p.rows[row] = p.rows[row].filter((u) => u.type !== 'unit' || u.power > 0)
   for (const u of dead) {
     p.graveyard.push({ iid: u.iid, defId: u.defId })
     emit(state, { type: 'destroyed', player, iid: u.iid, defId: u.defId })
@@ -139,20 +139,29 @@ export function hasLegalTarget(state: GameState, player: PlayerIndex, defId: str
   if (!deploy) return false
   const enemy = state.players[opponentOf(player)]
   const me = state.players[player]
+  const hasUnit = (p: PlayerState) => ROWS.some((r) => p.rows[r].some((u) => u.type === 'unit'))
   switch (deploy.type) {
     case 'damage':
     case 'rowDamage':
-      return enemy.rows.melee.length > 0 || enemy.rows.ranged.length > 0
+      return hasUnit(enemy)
     case 'boost':
-      return me.rows.melee.length > 0 || me.rows.ranged.length > 0
+      return hasUnit(me)
     default:
       return false
   }
 }
 
-function resolveDeploy(state: GameState, player: PlayerIndex, played: Unit, row: RowKind, target?: Target): void {
-  const deploy = CARD_DEFS[played.defId].deploy
+/** Resolve a deploy/spell effect. `row` is where the source landed (spells have none). */
+function resolveEffect(
+  state: GameState,
+  player: PlayerIndex,
+  source: CardInstance,
+  row?: RowKind,
+  target?: Target,
+): void {
+  const deploy = CARD_DEFS[source.defId].deploy
   if (!deploy) return
+  const played = source
   const enemy = opponentOf(player)
 
   switch (deploy.type) {
@@ -161,6 +170,7 @@ function resolveDeploy(state: GameState, player: PlayerIndex, played: Unit, row:
       if (target.player !== enemy) throw new Error('damage must target an enemy unit')
       const unit = findUnit(state, target)
       if (!unit) throw new Error('target unit not found')
+      if (unit.type !== 'unit') throw new Error('only units can be damaged')
       unit.power -= deploy.amount
       emit(state, {
         type: 'damaged',
@@ -179,6 +189,7 @@ function resolveDeploy(state: GameState, player: PlayerIndex, played: Unit, row:
       if (target.player !== player) throw new Error('boost must target an allied unit')
       const unit = findUnit(state, target)
       if (!unit) throw new Error('target unit not found')
+      if (unit.type !== 'unit') throw new Error('only units can be boosted')
       unit.power += deploy.amount
       emit(state, {
         type: 'boosted',
@@ -195,6 +206,7 @@ function resolveDeploy(state: GameState, player: PlayerIndex, played: Unit, row:
       if (!target) break
       if (target.player !== enemy) throw new Error('rowDamage must target an enemy row')
       for (const u of state.players[enemy].rows[target.row]) {
+        if (u.type !== 'unit') continue // artifacts are immune
         u.power -= deploy.amount
         emit(state, {
           type: 'damaged',
@@ -210,8 +222,9 @@ function resolveDeploy(state: GameState, player: PlayerIndex, played: Unit, row:
       break
     }
     case 'rowBoost': {
+      if (!row) break // needs a board position; spells don't have one
       for (const u of state.players[player].rows[row]) {
-        if (u.iid === played.iid) continue
+        if (u.iid === played.iid || u.type !== 'unit') continue
         u.power += deploy.amount
         emit(state, {
           type: 'boosted',
@@ -369,16 +382,31 @@ function doPlay(state: GameState, move: Move & { kind: 'play' }): void {
   if (handIndex < 0) throw new Error('card not in hand')
   const card = p.hand[handIndex]
   const def = CARD_DEFS[card.defId]
-  const row = p.rows[move.row]
-  const position = move.position ?? row.length
-  if (position < 0 || position > row.length) throw new Error('invalid row position')
 
-  p.hand.splice(handIndex, 1)
-  const unit: Unit = { iid: card.iid, defId: card.defId, basePower: def.power, power: def.power }
-  row.splice(position, 0, unit)
-  emit(state, { type: 'played', player: move.player, iid: unit.iid, defId: unit.defId, row: move.row, position })
+  if (def.type === 'spell') {
+    // Spells never touch the board: resolve, then straight to the graveyard.
+    p.hand.splice(handIndex, 1)
+    emit(state, { type: 'played', player: move.player, iid: card.iid, defId: card.defId })
+    resolveEffect(state, move.player, card, undefined, move.target)
+    p.graveyard.push({ iid: card.iid, defId: card.defId })
+  } else {
+    if (!move.row) throw new Error('units and artifacts must be played to a row')
+    const row = p.rows[move.row]
+    const position = move.position ?? row.length
+    if (position < 0 || position > row.length) throw new Error('invalid row position')
 
-  resolveDeploy(state, move.player, unit, move.row, move.target)
+    p.hand.splice(handIndex, 1)
+    const unit: Unit = {
+      iid: card.iid,
+      defId: card.defId,
+      type: def.type,
+      basePower: def.power ?? 0,
+      power: def.power ?? 0,
+    }
+    row.splice(position, 0, unit)
+    emit(state, { type: 'played', player: move.player, iid: unit.iid, defId: unit.defId, row: move.row, position })
+    resolveEffect(state, move.player, card, move.row, move.target)
+  }
 
   if (p.hand.length === 0 && !p.passed) {
     markPassed(state, move.player, 'noCards')

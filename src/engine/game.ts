@@ -456,16 +456,28 @@ function doPlay(state: GameState, move: Move & { kind: 'play' }): void {
   if (p.hand.length === 0 && !p.passed) {
     markPassed(state, move.player, 'noCards')
   }
-  resolveEndOfTurn(state, move.player)
-  advanceAfterAction(state)
+  endTurn(state, move.player)
 }
 
 function doPass(state: GameState, move: Move & { kind: 'pass' }): void {
   if (state.phase !== 'play') throw new Error('not in the play phase')
   if (state.players[move.player].passed) throw new Error('player has passed')
   markPassed(state, move.player, 'chose')
-  // Passing still ends a turn: end-of-turn effects fire one final time.
-  resolveEndOfTurn(state, move.player)
+  endTurn(state, move.player)
+}
+
+/**
+ * Close out the actor's turn: fire their end-of-turn effects, then — if the
+ * opponent has passed but the round continues — the opponent's "phantom
+ * turn": their end-of-turn effects keep firing between the actor's turns.
+ */
+function endTurn(state: GameState, actor: PlayerIndex): void {
+  resolveEndOfTurn(state, actor)
+  const other = opponentOf(actor)
+  const bothPassed = state.players[0].passed && state.players[1].passed
+  if (!bothPassed && state.players[other].passed) {
+    resolveEndOfTurn(state, other)
+  }
   advanceAfterAction(state)
 }
 

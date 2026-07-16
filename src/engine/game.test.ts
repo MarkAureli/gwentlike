@@ -374,6 +374,27 @@ describe('end-of-turn effects', () => {
     expect(g.players[0].rows.melee[0].power).toBe(5)
   })
 
+  it('a passed player’s effects fire as phantom turns between opponent turns', () => {
+    let g = gameWith(['sapling', 'militia'], ['militia', 'militia', 'militia', 'militia'])
+    g = play(g, 0, 0, 'melee') // sapling: 4
+    g = play(g, 1, 0, 'melee')
+    g = pass(g, 0) // sapling: 5
+    g = play(g, 1, 0, 'melee') // opponent turn + my phantom turn
+    expect(g.players[0].rows.melee[0].power).toBe(6)
+    g = play(g, 1, 0, 'melee')
+    expect(g.players[0].rows.melee[0].power).toBe(7)
+  })
+
+  it('no phantom turn fires on the pass that ends the round', () => {
+    let g = gameWith(['sapling', 'militia'], ['militia', 'militia'])
+    g = play(g, 0, 0, 'melee') // sapling: 4
+    g = play(g, 1, 0, 'melee')
+    g = pass(g, 0) // sapling: 5
+    g = pass(g, 1) // round resolves immediately — sapling scored at 5
+    const ended = g.events.find((e) => e.type === 'roundEnded')
+    expect(ended).toMatchObject({ totals: [5, 4], winner: 0 })
+  })
+
   it('boostRight skips artifacts', () => {
     let g = gameWith(['watchtower', 'sergeant', 'militia'], ['militia', 'militia'])
     g = play(g, 0, 0, 'melee') // watchtower (deploy fizzles, no enemies)

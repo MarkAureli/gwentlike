@@ -331,6 +331,60 @@ describe('artifacts', () => {
   })
 })
 
+describe('end-of-turn effects', () => {
+  it('boostSelf fires at the end of each of the owner’s turns only', () => {
+    let g = gameWith(['sapling', 'militia'], ['militia', 'militia'])
+    g = play(g, 0, 0, 'melee')
+    expect(g.players[0].rows.melee[0].power).toBe(4) // 3 + 1 on the turn it was played
+    g = play(g, 1, 0, 'melee')
+    expect(g.players[0].rows.melee[0].power).toBe(4) // opponent turns don't trigger it
+    g = play(g, 0, 0, 'ranged')
+    expect(g.players[0].rows.melee[0].power).toBe(5)
+  })
+
+  it('boostRight boosts the immediate right neighbour', () => {
+    let g = gameWith(['militia', 'sergeant', 'militia'], ['militia', 'militia'])
+    g = play(g, 0, 0, 'melee') // militia
+    g = play(g, 1, 0, 'melee')
+    // Sergeant inserted to the left of the militia.
+    g = applyMove(g, { kind: 'play', player: 0, iid: g.players[0].hand[0].iid, row: 'melee', position: 0 })
+    const row = g.players[0].rows.melee
+    expect(row.map((u) => u.defId)).toEqual(['sergeant', 'militia'])
+    expect(row[0].power).toBe(3) // sergeant doesn't boost itself
+    expect(row[1].power).toBe(5) // militia boosted once
+  })
+
+  it('resolves front row before back row, left to right', () => {
+    let g = gameWith(['militia', 'sergeant', 'sapling', 'militia'], ['militia'], 0)
+    g = play(g, 0, 0, 'ranged') // militia to the back row
+    g = pass(g, 1)
+    g = applyMove(g, { kind: 'play', player: 0, iid: g.players[0].hand[0].iid, row: 'ranged', position: 0 }) // sergeant left of it
+    g = play(g, 0, 0, 'melee') // sapling to the front row
+    // This turn's effects: front (sapling grows), then back (sergeant boosts).
+    const boosts = g.events.filter((e) => e.type === 'boosted').slice(-2)
+    expect(boosts[0]).toMatchObject({ defId: 'sapling', sourceDefId: 'sapling' })
+    expect(boosts[1]).toMatchObject({ defId: 'militia', sourceDefId: 'sergeant' })
+  })
+
+  it('passing fires end-of-turn effects one final time', () => {
+    let g = gameWith(['sapling', 'militia'], ['militia', 'militia'])
+    g = play(g, 0, 0, 'melee') // sapling: 4
+    g = play(g, 1, 0, 'melee')
+    g = pass(g, 0)
+    expect(g.players[0].rows.melee[0].power).toBe(5)
+  })
+
+  it('boostRight skips artifacts', () => {
+    let g = gameWith(['watchtower', 'sergeant', 'militia'], ['militia', 'militia'])
+    g = play(g, 0, 0, 'melee') // watchtower (deploy fizzles, no enemies)
+    g = play(g, 1, 0, 'melee')
+    g = applyMove(g, { kind: 'play', player: 0, iid: g.players[0].hand[0].iid, row: 'melee', position: 0 })
+    const row = g.players[0].rows.melee
+    expect(row.map((u) => u.defId)).toEqual(['sergeant', 'watchtower'])
+    expect(row[1].power).toBe(0) // artifact untouched
+  })
+})
+
 describe('row positioning helpers', () => {
   it('neighborsOf returns adjacent units only', () => {
     // The spare champion keeps the hand non-empty so the round doesn't end.

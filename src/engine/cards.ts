@@ -1,4 +1,4 @@
-import type { CardDef, DeployEffect } from './types'
+import type { CardDef, DeployEffect, EndOfTurnEffect } from './types'
 
 const defs: CardDef[] = [
   // Units
@@ -14,6 +14,8 @@ const defs: CardDef[] = [
   { id: 'drummer', name: 'War Drummer', type: 'unit', power: 2, provisions: 6, deploy: { type: 'rowBoost', amount: 1 } },
   { id: 'saboteur', name: 'Saboteur', type: 'unit', power: 3, provisions: 7, deploy: { type: 'rowDamage', amount: 1 } },
   { id: 'scholar', name: 'Scholar', type: 'unit', power: 2, provisions: 7, deploy: { type: 'draw' } },
+  { id: 'sapling', name: 'Wild Sapling', type: 'unit', power: 3, provisions: 7, endOfTurn: { type: 'boostSelf', amount: 1 } },
+  { id: 'sergeant', name: 'Drill Sergeant', type: 'unit', power: 3, provisions: 7, endOfTurn: { type: 'boostRight', amount: 1 } },
   // Spells — resolve their effect, then go straight to the graveyard
   { id: 'fireball', name: 'Fireball', type: 'spell', provisions: 8, deploy: { type: 'damage', amount: 4 } },
   { id: 'volley', name: 'Arrow Volley', type: 'spell', provisions: 7, deploy: { type: 'rowDamage', amount: 1 } },
@@ -26,8 +28,10 @@ export const CARD_DEFS: Record<string, CardDef> = Object.fromEntries(defs.map((d
 
 /** Shared 25-card starter deck used by both sides until deckbuilding exists. */
 export const STARTER_DECK: string[] = [
-  'militia', 'militia',
-  'shieldbearer', 'shieldbearer',
+  'militia',
+  'shieldbearer',
+  'sapling',
+  'sergeant',
   'pikeman', 'pikeman',
   'champion', 'champion',
   'scout', 'scout',
@@ -43,6 +47,21 @@ export const STARTER_DECK: string[] = [
   'blessing',
   'watchtower',
 ]
+
+export function endOfTurnText(effect: EndOfTurnEffect | undefined): string {
+  if (!effect) return ''
+  switch (effect.type) {
+    case 'boostSelf':
+      return `End of turn: boost self by ${effect.amount}.`
+    case 'boostRight':
+      return `End of turn: boost the unit to the right by ${effect.amount}.`
+  }
+}
+
+/** Full rules text of a card: deploy ability plus end-of-turn effect. */
+export function cardText(def: CardDef): string {
+  return [abilityText(def.deploy), endOfTurnText(def.endOfTurn)].filter(Boolean).join(' ')
+}
 
 export function abilityText(deploy: DeployEffect | undefined): string {
   if (!deploy) return ''

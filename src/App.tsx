@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { chooseMove } from './engine/ai'
-import { abilityText, CARD_DEFS, STARTER_DECK } from './engine/cards'
+import { CARD_DEFS, cardText, STARTER_DECK } from './engine/cards'
 import { describeEvent } from './engine/events'
 import { applyMove, createGame, hasLegalTarget, mulliganAllowance, playerTotal, rowTotal } from './engine/game'
 import type { CardInstance, GameState, RowKind, Target, Unit } from './engine/types'
@@ -53,7 +53,7 @@ function UnitBadge(props: { unit: Unit; targetable: boolean; onClick?: () => voi
       className={`unit ${targetable ? 'targetable' : ''} ${unit.type === 'artifact' ? 'artifact' : ''}`}
       onClick={onClick}
       disabled={!targetable}
-      title={abilityText(def.deploy)}
+      title={cardText(def)}
     >
       <span className={`unit-power ${powerClass}`}>{unit.type === 'artifact' ? typeGlyph('artifact') : unit.power}</span>
       <span className="unit-name">{def.name}</span>
@@ -300,7 +300,7 @@ export default function App() {
                   {def.type === 'unit' ? def.power : typeGlyph(def.type)}
                 </span>
                 <span className="card-name">{def.name}</span>
-                <span className="card-ability">{abilityText(def.deploy)}</span>
+                <span className="card-ability">{cardText(def)}</span>
               </button>
             )
           })}
@@ -351,7 +351,7 @@ export default function App() {
                       {def.type === 'unit' ? def.power : typeGlyph(def.type)}
                     </span>
                     <span className="inspect-name">{def.name}</span>
-                    <span className="inspect-ability">{abilityText(def.deploy)}</span>
+                    <span className="inspect-ability">{cardText(def)}</span>
                   </div>
                 )
               })}

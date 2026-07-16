@@ -22,6 +22,7 @@ You play against a simple greedy AI. Each round starts with a mulligan; after th
 - When both players have passed, the higher total power wins the round; a tie gives both players a round win. First to 2 round wins takes the game.
 - The round winner leads the next round; after a tied round, the player who went second in it leads.
 - Deploy abilities resolve when a card is played: single-target damage/boost, row damage/boost, and card draw.
+- End-of-turn effects fire after each of their owner's actions (playing a card, and once more on the pass): front (melee) row left-to-right first, then the back (ranged) row left-to-right. Opponent turns don't trigger them. Examples: Wild Sapling (boosts itself by 1), Drill Sergeant (boosts the unit to its right by 1).
 - Everything destroyed during a round or still on the board when it ends goes to its owner's graveyard.
 - Click your deck or graveyard counters to inspect them; the deck view is sorted by type and name so the actual draw order stays hidden.
 - Cards have provision costs in their definitions for future deckbuilding; both players currently use the same starter deck.

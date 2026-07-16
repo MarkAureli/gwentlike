@@ -249,6 +249,51 @@ function resolveEffect(
   }
 }
 
+/**
+ * Fire the acting player's end-of-turn effects: front (melee) row
+ * left-to-right, then back (ranged) row left-to-right.
+ */
+function resolveEndOfTurn(state: GameState, player: PlayerIndex): void {
+  for (const row of ROWS) {
+    // Snapshot: today's effects only change power, but future ones may not.
+    for (const u of [...state.players[player].rows[row]]) {
+      const effect = CARD_DEFS[u.defId].endOfTurn
+      if (!effect || u.type !== 'unit') continue
+      switch (effect.type) {
+        case 'boostSelf': {
+          u.power += effect.amount
+          emit(state, {
+            type: 'boosted',
+            player,
+            iid: u.iid,
+            defId: u.defId,
+            amount: effect.amount,
+            power: u.power,
+            sourceDefId: u.defId,
+          })
+          break
+        }
+        case 'boostRight': {
+          const live = state.players[player].rows[row]
+          const right = live[live.findIndex((x) => x.iid === u.iid) + 1]
+          if (!right || right.type !== 'unit') break
+          right.power += effect.amount
+          emit(state, {
+            type: 'boosted',
+            player,
+            iid: right.iid,
+            defId: right.defId,
+            amount: effect.amount,
+            power: right.power,
+            sourceDefId: u.defId,
+          })
+          break
+        }
+      }
+    }
+  }
+}
+
 function markPassed(state: GameState, player: PlayerIndex, reason: 'chose' | 'noCards'): void {
   state.players[player].passed = true
   emit(state, { type: 'passed', player, reason })
@@ -411,6 +456,7 @@ function doPlay(state: GameState, move: Move & { kind: 'play' }): void {
   if (p.hand.length === 0 && !p.passed) {
     markPassed(state, move.player, 'noCards')
   }
+  resolveEndOfTurn(state, move.player)
   advanceAfterAction(state)
 }
 
@@ -418,6 +464,8 @@ function doPass(state: GameState, move: Move & { kind: 'pass' }): void {
   if (state.phase !== 'play') throw new Error('not in the play phase')
   if (state.players[move.player].passed) throw new Error('player has passed')
   markPassed(state, move.player, 'chose')
+  // Passing still ends a turn: end-of-turn effects fire one final time.
+  resolveEndOfTurn(state, move.player)
   advanceAfterAction(state)
 }
 

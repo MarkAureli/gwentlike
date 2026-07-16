@@ -13,6 +13,15 @@ export type DeployEffect =
 
 export type CardType = 'unit' | 'spell' | 'artifact'
 
+/**
+ * Fires at the end of each of the owner's turns while the card is on the
+ * board. Resolution order: front (melee) row left-to-right, then back
+ * (ranged) row left-to-right.
+ */
+export type EndOfTurnEffect =
+  | { type: 'boostSelf'; amount: number }
+  | { type: 'boostRight'; amount: number } // boosts the unit directly to the right
+
 export interface CardDef {
   id: string
   name: string
@@ -21,6 +30,7 @@ export interface CardDef {
   power?: number
   provisions: number
   deploy?: DeployEffect
+  endOfTurn?: EndOfTurnEffect
 }
 
 /**

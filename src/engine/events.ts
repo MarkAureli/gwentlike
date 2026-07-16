@@ -32,7 +32,9 @@ export function describeEvent(e: GameEvent): string {
     case 'damaged':
       return `${name(e.sourceDefId)} deals ${e.amount} damage to ${name(e.defId)}.`
     case 'boosted':
-      return `${name(e.sourceDefId)} boosts ${name(e.defId)} by ${e.amount}.`
+      return e.sourceDefId === e.defId
+        ? `${name(e.defId)} grows by ${e.amount}.`
+        : `${name(e.sourceDefId)} boosts ${name(e.defId)} by ${e.amount}.`
     case 'destroyed':
       return `${name(e.defId)} is destroyed.`
     case 'passed':

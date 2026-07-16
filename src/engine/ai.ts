@@ -26,10 +26,18 @@ function placementRow(state: GameState, me: PlayerIndex): RowKind {
   return rows.melee.length <= rows.ranged.length ? 'melee' : 'ranged'
 }
 
+/** Expected extra points an end-of-turn effect earns over a round (~3 turns). */
+const END_OF_TURN_TURNS = 3
+
+function endOfTurnValue(card: CardInstance): number {
+  const effect = CARD_DEFS[card.defId].endOfTurn
+  return effect ? effect.amount * END_OF_TURN_TURNS : 0
+}
+
 /** Rough standalone value of holding this card. */
 function cardValue(card: CardInstance): number {
   const def = CARD_DEFS[card.defId]
-  if (def.type === 'unit') return def.power! + (def.deploy ? 3 : 0)
+  if (def.type === 'unit') return def.power! + (def.deploy ? 3 : 0) + endOfTurnValue(card)
   // Spells and artifacts: judge by their effect size.
   const amount = def.deploy && 'amount' in def.deploy ? def.deploy.amount : 2
   return 4 + amount
@@ -109,10 +117,20 @@ function scoreCard(state: GameState, me: PlayerIndex, card: CardInstance): Score
     }
   }
 
+  effectValue += endOfTurnValue(card)
+  // A boostRight unit wants a unit on its right: insert at the left end of
+  // whichever row has the most units.
+  let position: number | undefined
+  if (def.endOfTurn?.type === 'boostRight') {
+    const rows = state.players[me].rows
+    row = rows.melee.length >= rows.ranged.length ? 'melee' : 'ranged'
+    position = 0
+  }
+
   const move: Move =
     def.type === 'spell'
       ? { kind: 'play', player: me, iid: card.iid, target }
-      : { kind: 'play', player: me, iid: card.iid, row, target }
+      : { kind: 'play', player: me, iid: card.iid, row, position, target }
   return { move, score: (def.type === 'unit' ? def.power! : 0) + effectValue }
 }
 

@@ -39,6 +39,7 @@ function makePlayer(deck: CardInstance[]): PlayerState {
     passed: false,
     roundWins: 0,
     mulligansLeft: 0,
+    mulligansAllowed: 0,
     mulliganDone: false,
     mulliganBlacklist: [],
   }
@@ -51,19 +52,43 @@ function startMulliganPhase(state: GameState): void {
   for (const player of [0, 1] as const) {
     const p = state.players[player]
     p.mulligansLeft = mulliganAllowance(state, player)
+    p.mulligansAllowed = p.mulligansLeft
     p.mulliganDone = false
     p.mulliganBlacklist = []
   }
 }
 
-function draw(state: GameState, player: PlayerIndex, count: number): void {
+/** Round-start draws: each draw skipped at the hand limit becomes an extra mulligan. */
+function roundStartDraw(state: GameState, player: PlayerIndex): void {
+  const { capped } = draw(state, player, ROUND_DRAW)
+  if (capped > 0) {
+    const p = state.players[player]
+    p.mulligansLeft += capped
+    p.mulligansAllowed += capped
+    emit(state, { type: 'extraMulligans', player, count: capped })
+  }
+}
+
+/**
+ * Draw up to `count` cards. `capped` counts draws skipped because the hand
+ * was at the limit (an empty deck grants nothing).
+ */
+function draw(state: GameState, player: PlayerIndex, count: number): { drawn: number; capped: number } {
   const p = state.players[player]
+  let drawn = 0
+  let capped = 0
   for (let i = 0; i < count; i++) {
-    if (p.deck.length === 0 || p.hand.length >= HAND_LIMIT) return
+    if (p.hand.length >= HAND_LIMIT) {
+      capped++
+      continue
+    }
+    if (p.deck.length === 0) continue
     const card = p.deck.shift()!
     p.hand.push(card)
     emit(state, { type: 'drew', player, iid: card.iid, defId: card.defId })
+    drawn++
   }
+  return { drawn, capped }
 }
 
 export function createGame(deckA: string[], deckB: string[], seed: number): GameState {
@@ -239,9 +264,8 @@ function resolveEffect(
       break
     }
     case 'draw': {
-      const before = state.players[player].hand.length
-      draw(state, player, 1)
-      if (state.players[player].hand.length === before) {
+      const { drawn } = draw(state, player, 1)
+      if (drawn === 0) {
         emit(state, { type: 'drawFailed', player, sourceDefId: played.defId })
       }
       break
@@ -367,8 +391,8 @@ function resolveRound(state: GameState): void {
   state.leader = roundWinner === 'draw' ? opponentOf(state.leader) : roundWinner
   startMulliganPhase(state)
   emit(state, { type: 'roundStarted', round: state.round, leader: state.leader })
-  draw(state, 0, ROUND_DRAW)
-  draw(state, 1, ROUND_DRAW)
+  roundStartDraw(state, 0)
+  roundStartDraw(state, 1)
 }
 
 /** Swap a single hand card: shuffle it back (blacklisted) and draw a fresh one. */
@@ -412,7 +436,7 @@ function finishMulligan(state: GameState, player: PlayerIndex): void {
   emit(state, {
     type: 'mulliganEnded',
     player,
-    swapped: mulliganAllowance(state, player) - p.mulligansLeft,
+    swapped: p.mulligansAllowed - p.mulligansLeft,
   })
   const other = opponentOf(player)
   if (!state.players[other].mulliganDone) state.current = other

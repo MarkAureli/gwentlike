@@ -59,6 +59,8 @@ export interface PlayerState {
   passed: boolean
   roundWins: number
   mulligansLeft: number
+  /** this round's total allowance: base (3 leader / 2 follower) + extras for hand-limit-skipped draws */
+  mulligansAllowed: number
   mulliganDone: boolean
   /** iids swapped away this mulligan phase — they cannot be redrawn until it ends */
   mulliganBlacklist: number[]
@@ -91,6 +93,7 @@ export type GameEvent =
   | { type: 'roundStarted'; round: number; leader: PlayerIndex }
   | { type: 'mulliganed'; player: PlayerIndex; iid: number; defId: string }
   | { type: 'mulliganEnded'; player: PlayerIndex; swapped: number }
+  | { type: 'extraMulligans'; player: PlayerIndex; count: number }
   | { type: 'played'; player: PlayerIndex; iid: number; defId: string; row?: RowKind; position?: number }
   | { type: 'drew'; player: PlayerIndex; iid: number; defId: string }
   | { type: 'drawFailed'; player: PlayerIndex; sourceDefId: string }

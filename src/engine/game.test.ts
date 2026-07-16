@@ -145,6 +145,27 @@ describe('mulligan', () => {
     expect(() => applyMove(g, { kind: 'pass', player: me })).toThrow('not in the play phase')
   })
 
+  it('grants an extra mulligan per round-start draw skipped at the hand limit', () => {
+    // P1 ends round 1 with 9 cards: draws only 1 of 3, so +2 mulligans.
+    let g = gameWith(
+      ['pikeman', ...Array(9).fill('militia')],
+      ['militia', 'militia'],
+    )
+    g = play(g, 0, 0, 'melee') // 6 power, hand: 9
+    g = play(g, 1, 0, 'melee') // 4 power, hand: 1
+    g = pass(g, 0)
+    g = pass(g, 1)
+    expect(g.round).toBe(2)
+    // P1 (leader): 9 + 1 = 10 cards, base 3 + 2 extra = 5 swaps.
+    expect(g.players[0].hand).toHaveLength(10)
+    expect(g.players[0].mulligansLeft).toBe(MULLIGANS_LEADER + 2)
+    expect(g.players[0].mulligansAllowed).toBe(MULLIGANS_LEADER + 2)
+    expect(g.events).toContainEqual({ type: 'extraMulligans', player: 0, count: 2 })
+    // P2 drew all 3: no extras.
+    expect(g.players[1].hand).toHaveLength(4)
+    expect(g.players[1].mulligansLeft).toBe(MULLIGANS_FOLLOWER)
+  })
+
   it('rejects mulligan moves during the play phase', () => {
     const g = gameWith(['militia'], ['militia'])
     expect(() =>

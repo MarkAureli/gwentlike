@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { chooseMove } from './engine/ai'
 import { CARD_DEFS, cardText, STARTER_DECK } from './engine/cards'
 import { describeEvent } from './engine/events'
-import { applyMove, createGame, hasLegalTarget, mulliganAllowance, playerTotal, rowTotal } from './engine/game'
+import { applyMove, createGame, hasLegalTarget, playerTotal, rowTotal } from './engine/game'
 import type { CardInstance, GameState, RowKind, Target, Unit } from './engine/types'
 
 const HUMAN = 0 as const
@@ -307,7 +307,7 @@ export default function App() {
         </div>
         {inMulligan ? (
           <button className="pass-button" onClick={onEndMulligan} disabled={!humanCanAct}>
-            {me.mulligansLeft === mulliganAllowance(game, HUMAN) ? 'Keep hand' : 'Done'}
+            {me.mulligansLeft === me.mulligansAllowed ? 'Keep hand' : 'Done'}
           </button>
         ) : (
           <button className="pass-button" onClick={onPass} disabled={!humanCanAct}>
